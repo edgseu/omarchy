@@ -34,9 +34,10 @@ AGENT_NAME = "Gemini"
 AUTH_HELP = "Run `antigravity` to authenticate."
 PROBE_MIN_INTERVAL_SECONDS = 15
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
-CLOUDCODE_BASE_URL = "https://daily-cloudcode-pa.googleapis.com"
-LOAD_CODE_ASSIST_URL = f"{CLOUDCODE_BASE_URL}/v1internal:loadCodeAssist"
-RETRIEVE_USER_QUOTA_SUMMARY_URL = f"{CLOUDCODE_BASE_URL}/v1internal:retrieveUserQuotaSummary"
+CLOUDCODE_BASE_URLS = [
+  "https://daily-cloudcode-pa.googleapis.com",
+  "https://cloudcode-pa.googleapis.com",
+]
 
 
 def cache_root() -> Path:
@@ -113,7 +114,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
   try:
     with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
       handle.write(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n")
-    tmp.chmod(0o644)
+    tmp.chmod(0o600)
     tmp.replace(path)
   except BaseException:
     tmp.unlink(missing_ok=True)
@@ -123,8 +124,12 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------- OAuth Token
 
 
-def get_auth_token() -> tuple[str, int, str]:
-  """Returns (access_token, expires_at_ms, refresh_token)."""
+def get_auth_token() -> tuple[str, int]:
+  """Returns (access_token, expires_at_ms).
+
+  Reads the active Antigravity CLI Bearer token from Secret Service.
+  Does not store or mutate credentials in the system keyring.
+  """
   try:
     raw = subprocess.check_output(
       ["secret-tool", "lookup", "service", "gemini", "username", "antigravity"],
@@ -135,8 +140,8 @@ def get_auth_token() -> tuple[str, int, str]:
       data = json.loads(raw)
       token_obj = data.get("token") or {}
       access_token = str(token_obj.get("access_token") or "").strip()
-      refresh_token = str(token_obj.get("refresh_token") or "").strip()
       expiry_str = str(token_obj.get("expiry") or "").strip()
+      del data, raw
       expires_at_ms = 0
       if expiry_str:
         try:
@@ -144,64 +149,11 @@ def get_auth_token() -> tuple[str, int, str]:
           expires_at_ms = round(exp_dt.timestamp() * 1000)
         except Exception:
           pass
-
-      now_ms = round(time.time() * 1000)
-      client_id = os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_ID", "")
-      client_secret = os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
-      if (not access_token or expires_at_ms <= now_ms + 60000) and refresh_token and client_id and client_secret:
-        refreshed_access, new_exp_ms = refresh_google_token(refresh_token, client_id, client_secret)
-        if refreshed_access:
-          access_token = refreshed_access
-          expires_at_ms = new_exp_ms
-          try:
-            token_obj["access_token"] = access_token
-            if new_exp_ms > 0:
-              token_obj["expiry"] = dt.datetime.fromtimestamp(new_exp_ms / 1000, tz=dt.timezone.utc).isoformat()
-            data["token"] = token_obj
-            subprocess.run(
-              [
-                "secret-tool",
-                "store",
-                "--label=Password for 'antigravity' on 'gemini'",
-                "service",
-                "gemini",
-                "username",
-                "antigravity",
-              ],
-              input=json.dumps(data).encode("utf-8"),
-              stderr=subprocess.DEVNULL,
-              timeout=3,
-            )
-          except Exception:
-            pass
-      return access_token, expires_at_ms, refresh_token
-  except Exception:
-    pass
-  return "", 0, ""
-
-
-def refresh_google_token(refresh_token: str, client_id: str, client_secret: str) -> tuple[str, int]:
-  try:
-    payload = urllib.parse.urlencode({
-      "client_id": client_id,
-      "client_secret": client_secret,
-      "refresh_token": refresh_token,
-      "grant_type": "refresh_token",
-    }).encode("utf-8")
-    req = urllib.request.Request(
-      OAUTH_TOKEN_URL,
-      data=payload,
-      headers={"Content-Type": "application/x-www-form-urlencoded"},
-      method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-      data = json.loads(resp.read().decode("utf-8"))
-      access_token = data.get("access_token", "")
-      expires_in = number(data.get("expires_in", 3600))
-      expires_at_ms = round((time.time() + expires_in) * 1000)
       return access_token, expires_at_ms
   except Exception:
-    return "", 0
+    pass
+  return "", 0
+
 
 
 # ------------------------------------------------------------- Limits & Tier
@@ -245,71 +197,85 @@ def probe_limits(access_token: str) -> dict[str, Any]:
   }
   tier_label = ""
   limits = []
+  last_error: Exception | None = None
 
-  try:
-    req = urllib.request.Request(
-      LOAD_CODE_ASSIST_URL,
-      data=json.dumps({"cloudaicompanion_project": "default-cli-project"}).encode("utf-8"),
-      headers=headers,
-      method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-      data = json.loads(resp.read().decode("utf-8"))
-      tier_label = plan_label(data)
-  except Exception:
-    pass
+  for base_url in CLOUDCODE_BASE_URLS:
+    try:
+      req = urllib.request.Request(
+        f"{base_url}/v1internal:loadCodeAssist",
+        data=json.dumps({"cloudaicompanion_project": "default-cli-project"}).encode("utf-8"),
+        headers=headers,
+        method="POST",
+      )
+      with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        tier_label = plan_label(data)
+        break
+    except Exception:
+      pass
 
-  try:
-    req = urllib.request.Request(
-      RETRIEVE_USER_QUOTA_SUMMARY_URL,
-      data=json.dumps({"project": "default-cli-project"}).encode("utf-8"),
-      headers=headers,
-      method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-      data = json.loads(resp.read().decode("utf-8"))
-      groups = data.get("groups") or []
-      for group in groups:
-        group_name = group.get("displayName") or ""
-        is_gemini_group = "gemini" in group_name.lower()
-        for bucket in group.get("buckets") or []:
-          bucket_id = str(bucket.get("bucketId") or "").lower()
-          window = str(bucket.get("window") or "").lower()
-          display_name = str(bucket.get("displayName") or "")
-          rem_frac = float(bucket.get("remainingFraction", 1.0))
-          used_percent = max(0.0, min(1.0, 1.0 - rem_frac))
-          reset_time = str(bucket.get("resetTime") or "")
+  for base_url in CLOUDCODE_BASE_URLS:
+    try:
+      req = urllib.request.Request(
+        f"{base_url}/v1internal:retrieveUserQuotaSummary",
+        data=json.dumps({"project": "default-cli-project"}).encode("utf-8"),
+        headers=headers,
+        method="POST",
+      )
+      with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        groups = data.get("groups") or []
+        for group in groups:
+          group_name = group.get("displayName") or ""
+          is_gemini_group = "gemini" in group_name.lower()
+          for bucket in group.get("buckets") or []:
+            bucket_id = str(bucket.get("bucketId") or "").lower()
+            window = str(bucket.get("window") or "").lower()
+            display_name = str(bucket.get("displayName") or "")
+            rem_frac = float(bucket.get("remainingFraction", 1.0))
+            used_percent = max(0.0, min(1.0, 1.0 - rem_frac))
+            reset_time = str(bucket.get("resetTime") or "")
 
-          if "5h" in window or "5h" in bucket_id or "five hour" in display_name.lower():
-            title = "Session"
-            label = "Session (5-hour)"
-          elif "week" in window or "week" in bucket_id or "weekly" in display_name.lower():
-            title = "Weekly"
-            label = "Weekly (7-day)"
-          else:
-            title = display_name or "Limit"
-            label = display_name or "Limit"
+            if "5h" in window or "5h" in bucket_id or "five hour" in display_name.lower():
+              title = "Session"
+              label = "Session (5-hour)"
+            elif "week" in window or "week" in bucket_id or "weekly" in display_name.lower():
+              title = "Weekly"
+              label = "Weekly (7-day)"
+            else:
+              title = display_name or "Limit"
+              label = display_name or "Limit"
 
-          if not is_gemini_group:
-            short_group = "Claude & GPT" if "claude" in group_name.lower() else group_name
-            title = f"{short_group} {title}"
-            label = f"{short_group} {label}"
-          limits.append({
-            "label": label,
-            "title": title,
-            "percent": used_percent,
-            "resetsAt": reset_time,
-          })
-  except urllib.error.HTTPError as error:
-    retry_after = error.headers.get("retry-after", "") if error.headers else ""
-    if error.code == 429:
-      help_text = "Google Cloud Code usage endpoint is rate limiting checks" + (
-        f" (retry after {retry_after}s)" if retry_after else ""
-      ) + ". Local Gemini stats are still shown."
-    else:
-      help_text = f"Google Cloud Code endpoint returned status {error.code}. Local Gemini stats are still shown."
-    return {"ok": False, "helpText": help_text, "tierLabel": tier_label}
-  except Exception:
+            if not is_gemini_group:
+              short_group = "Claude & GPT" if "claude" in group_name.lower() else group_name
+              title = f"{short_group} {title}"
+              label = f"{short_group} {label}"
+            limits.append({
+              "label": label,
+              "title": title,
+              "percent": used_percent,
+              "resetsAt": reset_time,
+            })
+        last_error = None
+        break
+    except urllib.error.HTTPError as error:
+      last_error = error
+      if error.code in (401, 403):
+        break
+    except Exception as error:
+      last_error = error
+      continue
+
+  if last_error is not None and not limits:
+    if isinstance(last_error, urllib.error.HTTPError):
+      retry_after = last_error.headers.get("retry-after", "") if last_error.headers else ""
+      if last_error.code == 429:
+        help_text = "Google Cloud Code usage endpoint is rate limiting checks" + (
+          f" (retry after {retry_after}s)" if retry_after else ""
+        ) + ". Local Gemini stats are still shown."
+      else:
+        help_text = f"Google Cloud Code endpoint returned status {last_error.code}. Local Gemini stats are still shown."
+      return {"ok": False, "helpText": help_text, "tierLabel": tier_label}
     return {
       "ok": False,
       "transport": True,
@@ -318,6 +284,7 @@ def probe_limits(access_token: str) -> dict[str, Any]:
     }
 
   return {"ok": True, "limits": limits, "tierLabel": tier_label}
+
 
 
 def limit_window_open(entry: dict[str, Any], now: dt.datetime) -> bool:
@@ -583,7 +550,7 @@ def cached_scan(max_age_seconds: float) -> dict[str, Any]:
   if cached is not None:
     return cached
 
-  with lock_file.open("w") as lock:
+  with lock_file.open("a") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     cached = read_fresh_json(cache_file, max_age_seconds)
     if cached is not None:
@@ -606,7 +573,7 @@ def main() -> int:
   scan_age = 0 if args.force else (900 if args.limits_only else args.cache_seconds)
   stats = cached_scan(scan_age)
 
-  access_token, expires_at_ms, _ = get_auth_token()
+  access_token, expires_at_ms = get_auth_token()
   limits = collect_limits(access_token, expires_at_ms, args.force)
 
   record = {
