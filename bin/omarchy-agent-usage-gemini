@@ -13,18 +13,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
-import hashlib
 import json
 import os
-import re
-import shutil
 import sqlite3
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -33,7 +28,7 @@ AGENT_ID = "gemini"
 AGENT_NAME = "Gemini"
 AUTH_HELP = "Run `antigravity` to authenticate."
 PROBE_MIN_INTERVAL_SECONDS = 15
-OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+OPEN_ENDED_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
 CLOUDCODE_BASE_URLS = [
   "https://daily-cloudcode-pa.googleapis.com",
   "https://cloudcode-pa.googleapis.com",
@@ -232,8 +227,16 @@ def probe_limits(access_token: str) -> dict[str, Any]:
             bucket_id = str(bucket.get("bucketId") or "").lower()
             window = str(bucket.get("window") or "").lower()
             display_name = str(bucket.get("displayName") or "")
-            rem_frac = float(bucket.get("remainingFraction", 1.0))
-            used_percent = max(0.0, min(1.0, 1.0 - rem_frac))
+            try:
+              rem_frac = float(bucket.get("remainingFraction", 1.0))
+            except (TypeError, ValueError):
+              # One malformed bucket must not discard every limit the
+              # endpoint returned; skip it and keep the rest.
+              continue
+            if rem_frac != rem_frac:  # NaN would poison the JSON output
+              continue
+            rem_frac = max(0.0, min(1.0, rem_frac))
+            used_percent = 1.0 - rem_frac
             reset_time = str(bucket.get("resetTime") or "")
 
             if "5h" in window or "5h" in bucket_id or "five hour" in display_name.lower():
@@ -305,7 +308,20 @@ def usable_cached_limits(cached: dict[str, Any]) -> list[dict[str, Any]]:
   if not isinstance(entries, list):
     return []
   now = dt.datetime.now(dt.timezone.utc)
-  return [entry for entry in entries if isinstance(entry, dict) and limit_window_open(entry, now)]
+  fetched_at = number(cached.get("fetchedAtMs")) / 1000.0
+  # Entries without a reset time never expire on their own; cap how long the
+  # cache may keep serving them once probing stops succeeding.
+  keep_open_ended = time.time() - fetched_at <= OPEN_ENDED_CACHE_MAX_AGE_SECONDS
+  kept: list[dict[str, Any]] = []
+  for entry in entries:
+    if not isinstance(entry, dict):
+      continue
+    if entry.get("resetsAt"):
+      if limit_window_open(entry, now):
+        kept.append(entry)
+    elif keep_open_ended:
+      kept.append(entry)
+  return kept
 
 
 def collect_limits(access_token: str, expires_at_ms: int, force: bool) -> dict[str, Any]:
@@ -336,7 +352,7 @@ def collect_limits(access_token: str, expires_at_ms: int, force: bool) -> dict[s
     return result
 
   probe = probe_limits(access_token)
-  if probe["ok"]:
+  if probe["ok"] and probe["limits"]:
     result["limits"] = probe["limits"]
     result["tierLabel"] = probe.get("tierLabel") or cached_tier
     write_json(
@@ -349,11 +365,15 @@ def collect_limits(access_token: str, expires_at_ms: int, force: bool) -> dict[s
     )
     return result
 
+  # The probe answered without quota buckets (an error-shaped 200 or an API
+  # change) or failed outright: keep serving cached limits instead of wiping
+  # them with an empty list, and trust the cached tier over one derived from
+  # an error body.
   if probe.get("transport"):
     result["retryAdvised"] = True
   if fallback:
     result["limits"] = fallback
-    result["tierLabel"] = probe.get("tierLabel") or cached_tier
+    result["tierLabel"] = cached_tier or probe.get("tierLabel")
   else:
     result["tierLabel"] = probe.get("tierLabel") or cached_tier
     result["usageStatusText"] = "Gemini limits unavailable"
@@ -471,6 +491,11 @@ def scan_local_usage() -> dict[str, Any]:
         for line in handle:
           try:
             entry = json.loads(line)
+            # Count prompts only: skip assistant/model/response rows when the
+            # history carries roles, so replies do not double-count.
+            kind = str(entry.get("role") or entry.get("type") or "").lower()
+            if kind in ("assistant", "model", "response"):
+              continue
             ts = entry.get("timestamp")
             day = local_date_from_timestamp(ts)
             active_days.add(day)
@@ -581,7 +606,7 @@ def main() -> int:
     "id": AGENT_ID,
     "name": AGENT_NAME,
     "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
-    "ready": number(stats.get("totalPrompts")) > 0 or len(limits["limits"]) > 0 or bool(access_token),
+    "ready": number(stats.get("totalPrompts")) > 0 or len(limits["limits"]) > 0,
     "hasLocalStats": True,
     "tierLabel": limits.get("tierLabel", ""),
     "usageStatusText": limits.get("usageStatusText", ""),
