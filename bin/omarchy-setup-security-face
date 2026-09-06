@@ -7,6 +7,7 @@ set -e
 
 HOWDY_DIR="/lib/security/howdy"
 PAM_FILE="/etc/pam.d/omarchy-lock-howdy"
+CAMERA_DEVICE=""
 
 configure_ir_emitter() {
   # If an IR emitter tool is present or installable, ensure it is configured
@@ -54,23 +55,30 @@ configure_howdy_settings() {
     "$config_file"
 
   # Find stable IR camera path if not already configured
-  local ir_device=""
-  if [[ -d /dev/v4l/by-path ]]; then
-    for dev in /dev/v4l/by-path/*; do
-      [[ -e $dev ]] || continue
-      local dev_name
-      dev_name=$(v4l2-ctl --device="$dev" --all 2>/dev/null | grep -i 'card' || true)
-      if [[ ${dev_name,,} == *ir* || ${dev_name,,} == *infra* ]]; then
-        ir_device="$dev"
-        break
-      fi
-    done
-  fi
-
+  local ir_device
+  ir_device=$(find_ir_device) || ir_device=""
   if [[ -n $ir_device ]]; then
+    CAMERA_DEVICE="$ir_device"
     echo "Found IR camera device: $ir_device"
     sudo sed -i -E "s|^[# ]*device_path\s*=.*|device_path = $ir_device|" "$config_file"
   fi
+}
+
+find_ir_device() {
+  # /dev/v4l/by-path is the stable naming (ArchWiki), and the same path the
+  # IR emitter tool expects.
+  if [[ -d /dev/v4l/by-path ]]; then
+    local dev dev_name
+    for dev in /dev/v4l/by-path/*; do
+      [[ -e $dev ]] || continue
+      dev_name=$(v4l2-ctl --device="$dev" --all 2>/dev/null | grep -i 'card' || true)
+      if [[ ${dev_name,,} == *ir* || ${dev_name,,} == *infra* ]]; then
+        echo "$dev"
+        return 0
+      fi
+    done
+  fi
+  return 1
 }
 
 # Copy config and enrolled models to the path the PAM module reads, in case
@@ -84,6 +92,34 @@ normalize_howdy_paths() {
   if [[ -d /usr/local/etc/howdy/models && ! -d $HOWDY_DIR/models ]]; then
     sudo cp -a /usr/local/etc/howdy/models "$HOWDY_DIR/models"
   fi
+}
+
+verify_camera_capture() {
+  # Detection only proves a camera exists, not that it can deliver frames —
+  # the same reason fingerprint enrollment verifies before touching PAM.
+  # Grab one frame from the device Howdy will read, falling back to any
+  # capture node when no IR device was identified.
+  local dev
+  if [[ -n $CAMERA_DEVICE ]]; then
+    v4l2-ctl --device="$CAMERA_DEVICE" --stream-mmap --stream-count=1 --stream-to=/dev/null >/dev/null 2>&1 && return 0
+  fi
+  for dev in /dev/video*; do
+    [[ -e $dev ]] || continue
+    v4l2-ctl --device="$dev" --stream-mmap --stream-count=1 --stream-to=/dev/null >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+verify_enrollment() {
+  # Enrollment must leave a model behind; an empty models directory means the
+  # enrollment silently failed and PAM would have nothing to match.
+  local dir
+  for dir in "$HOWDY_DIR/models" /usr/local/etc/howdy/models; do
+    if [[ -d $dir ]] && [[ -n $(ls -A "$dir" 2>/dev/null) ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 setup_lock_howdy_pam() {
@@ -120,12 +156,24 @@ fi
 configure_ir_emitter
 configure_howdy_settings
 
+# Verify the camera delivers frames before asking for a face.
+echo "Verifying the camera can capture frames..."
+if ! verify_camera_capture; then
+  echo -e "\e[31mCamera check failed: no device produced video frames.\e[0m"
+  echo -e "\e[31mHowdy needs a working camera. Nothing was changed on your system.\e[0m"
+  exit 1
+fi
+
 # Enroll initial model
 echo -e "\e[32m\nStep 1: Baseline Face Model\e[0m"
 echo -e "Look straight at the camera with normal lighting.\n"
 
 if sudo howdy add; then
   normalize_howdy_paths
+  if ! verify_enrollment; then
+    echo -e "\e[31mEnrollment completed but no face model was stored. Please try again.\e[0m"
+    exit 1
+  fi
   setup_lock_howdy_pam
   echo -e "\e[32m\nBaseline model enrolled successfully!\e[0m"
 else

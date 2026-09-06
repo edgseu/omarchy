@@ -110,6 +110,31 @@ if ! grep -q "omarchy-lock-howdy" "$REMOVE"; then
 fi
 pass "remove tears down the face PAM context"
 
+# The hardware detector is sysfs-precise (uvcvideo binding, or camera/IR-ish
+# embedded names) and must not match every /dev/video node.
+if ! grep -q "uvcvideo" "$ROOT/bin/omarchy-hw-face"; then
+  fail "hardware detector matches USB webcams by their driver binding"
+fi
+pass "hardware detector matches USB webcams by their driver binding"
+
+if grep -q "ls /dev/video" "$ROOT/bin/omarchy-hw-face"; then
+  fail "hardware detector must not match every /dev/video node"
+fi
+pass "hardware detector must not match every /dev/video node"
+
+# Enrollment mirrors the fingerprint flow: prove the camera delivers frames
+# before asking for a face, and prove enrollment stored a model before any
+# PAM configuration is written.
+if ! grep -q "verify_camera_capture" "$SETUP" || ! grep -q "stream-count=1" "$SETUP"; then
+  fail "setup verifies the camera can capture frames before enrollment"
+fi
+pass "setup verifies the camera can capture frames before enrollment"
+
+if ! grep -q "verify_enrollment" "$SETUP" || ! grep -q "no face model was stored" "$SETUP"; then
+  fail "setup verifies enrollment produced a face model before writing PAM"
+fi
+pass "setup verifies enrollment produced a face model before writing PAM"
+
 # The lock service keeps the face flow bounded: attempts are rate-limited so
 # motion wake cannot turn every mouse movement into a camera-on PAM attempt.
 if ! grep -q "faceCooldownTimer" "$SERVICE"; then
