@@ -313,7 +313,7 @@ function termInSearchWords(term, text) {
 }
 
 function descriptionTextMatches(query, text) {
-  var terms = String(query || "").toLowerCase().trim().split(/\s+/)
+  var terms = queryTerms(query)
   for (var i = 0; i < terms.length; i++) {
     if (terms[i] && !termInSearchWords(terms[i], text)) return false
   }
@@ -335,19 +335,25 @@ function fuzzyTextScore(term, text) {
     position = haystack.indexOf(needle.charAt(i), position + 1)
     if (position < 0) return -1
 
-    // Earlier matches, word starts, and consecutive characters rank first.
+    // Earlier matches, word starts (whitespace and . _ : / \ - delimiters),
+    // and consecutive characters rank first.
     score += position === 0 || /[\s._:/\\-]/.test(haystack.charAt(position - 1)) ? -4 : 0
     if (previous >= 0) score += Math.max(0, position - previous - 1) * 2
     previous = position
   }
 
-  // Keep -1 reserved for no match; word-start bonuses may otherwise make a
-  // successful short match negative.
-  return 10 + score + Math.max(0, position - needle.length + 1)
+  // Keep -1 reserved for no match, and floor successful matches at 1:
+  // word-start bonuses can otherwise drive a verbatim substring ("a.b.c"
+  // matching itself) negative, hiding rows the exact search used to find.
+  return Math.max(1, 10 + score + Math.max(0, position - needle.length + 1))
+}
+
+function queryTerms(query) {
+  return String(query || "").toLowerCase().trim().split(/\s+/)
 }
 
 function fuzzyQueryScore(query, text) {
-  var terms = String(query || "").toLowerCase().trim().split(/\s+/)
+  var terms = queryTerms(query)
   var score = 0
   for (var i = 0; i < terms.length; i++) {
     if (!terms[i]) continue
@@ -364,7 +370,7 @@ function matchesQuery(entry, query, visible) {
 
   var nameText = nameSearchText(entry)
   var descriptionText = String(entry.description || "").toLowerCase()
-  var terms = String(query || "").toLowerCase().trim().split(/\s+/)
+  var terms = queryTerms(query)
 
   for (var i = 0; i < terms.length; i++) {
     if (!terms[i]) continue
@@ -393,9 +399,13 @@ function searchScore(items, entry, query) {
   else if (nameText.indexOf(needle) >= 0) score = 40
   else if (descriptionTextMatches(needle, descriptionText)) score = 60
   else {
+    // Fuzzy tiers rank behind every exact tier (0-60); the 80 default never
+    // competes because matchesQuery gates the list first. Name matches cap
+    // below the description tier so a scattered multi-term name match cannot
+    // invert name-over-description ordering.
     var nameFuzzyScore = fuzzyQueryScore(needle, nameText)
     var descriptionFuzzyScore = fuzzyQueryScore(needle, descriptionText)
-    if (nameFuzzyScore >= 0) score = 70 + nameFuzzyScore
+    if (nameFuzzyScore >= 0) score = Math.min(99, 70 + nameFuzzyScore)
     else if (descriptionFuzzyScore >= 0) score = 100 + descriptionFuzzyScore
   }
   if (entry.kind === "menu" || entry.kind === "link") score -= 2

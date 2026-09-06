@@ -114,6 +114,11 @@ assertEqual(menu.fuzzyQueryScore('thm zzz', 'Theme picker'), -1, 'fuzzy query sc
 assert(menu.matchesQuery(entry, 'thm', true), 'menu matches fuzzy queries')
 assert(menu.matchesQuery(entry, 'thm pck', true), 'menu matches multi-term fuzzy queries')
 assert(menu.searchScore(merged.items, entry, 'theme') < menu.searchScore(merged.items, entry, 'thm'), 'exact matches score higher than fuzzy matches')
+assert(menu.fuzzyTextScore('a.b.c', 'a.b.c') >= 1, 'verbatim delimiter self-matches floor above no-match so exact rows stay visible')
+assert(menu.fuzzyTextScore('....', '....') >= 1, 'delimiter-only verbatim matches floor above no-match')
+assert(menu.matchesQuery({ id: 'test.row', label: 'a.b.c' }, 'a.b.c', true), 'menu keeps rows findable by their exact delimiter text')
+const cappedEntry = { id: 'test.cap', label: 'a b c d e f g h', order: 0 }
+assert(menu.searchScore([cappedEntry], cappedEntry, 'a b c d f g') < 100 * 1000, 'fuzzy name matches cap below the description tier')
 
 assertDeepEqual(
   menu.displayRow(merged.items, merged.itemOrder, {}, {}, entry, 'Style', 12, 'search'),
