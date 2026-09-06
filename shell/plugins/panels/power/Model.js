@@ -78,16 +78,18 @@ function batteryIcon(device, onBattery, states) {
   var d = device || {}
   if (!d.isPresent) return ""
 
+  // battery_charging_10..100 — the MDI charging series; its codepoints are
+  // scattered across the font, so the literals below are the ordered set.
   var chargingIcons = ["󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"]
   var defaultIcons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
   var index = Math.max(0, Math.min(9, Math.floor(d.percentage * 10)))
   var threshold = chargeThresholdActive(d, onBattery, states)
 
-  // battery-plus-variant keeps the plus inside the battery body. The regular
-  // battery-plus glyph places it at the lower-right edge, where it vanishes
-  // at the compact size used by the top bar.
+  // battery-plus (U+F17E6) marks a charge-limit hold: a full battery with a
+  // plus, reading as "limit" next to the bolt used while actively charging.
   if (threshold) return "󱟦"
-  if (d.state === states.FullyCharged) return "󰂅"
+  // battery-check (U+F17E2): charged and holding, not actively charging.
+  if (d.state === states.FullyCharged) return "󱟢"
   if (!onBattery) return chargingIcons[index]
   return defaultIcons[index]
 }

@@ -34,7 +34,8 @@ assertEqual(power.modeLabel({ isPresent: true, percentage: 1, state: states.Full
 assertEqual(power.modeLabel({ isPresent: true, percentage: 0.5, state: states.Discharging }, true, states), 'On battery', 'power labels battery mode')
 assertEqual(power.modeLabel({ isPresent: true, percentage: 0.5, state: states.Discharging }, false, states), 'Charging', 'power treats external power as newer than stale discharging state')
 assert(power.batteryIcon({ isPresent: true, percentage: 0.4, state: states.Charging }, false, states).length > 0, 'power maps battery icons')
-assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.PendingCharge }, false, states), '󱟦', 'power returns battery-plus-variant icon at threshold')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.PendingCharge }, false, states), '󱟦', 'power returns the battery-plus glyph at threshold')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 1, state: states.FullyCharged }, false, states), '󱟢', 'power returns the battery-check glyph when fully charged')
 assertEqual(
   power.batteryIcon({ isPresent: true, percentage: 0.4, state: states.Discharging }, false, states),
   power.batteryIcon({ isPresent: true, percentage: 0.4, state: states.Charging, changeRate: 1.0, timeToFull: 120 }, false, states),
