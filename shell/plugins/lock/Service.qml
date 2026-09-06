@@ -214,10 +214,14 @@ Item {
   function startFace() {
     if (!lockRequested || !sessionLock.secure || !facePamConfigured) return
     if (facePam.active || faceAuthenticating) return
+    // Rate-limit restarts (motion wake, resume) so a broken face stack cannot
+    // turn every mouse movement into a PAM attempt with the camera on.
+    if (faceCooldownTimer.running) return
 
     faceAuthenticating = true
     if (!facePam.start()) {
       faceAuthenticating = false
+      faceCooldownTimer.restart()
       return
     }
     faceAttemptTimer.restart()
@@ -226,6 +230,7 @@ Item {
   function handleFaceFinished(result) {
     faceAttemptTimer.stop()
     faceAuthenticating = false
+    faceCooldownTimer.restart()
     if (!lockRequested) return
     if (result === PamResult.Success) finishUnlock()
   }
@@ -382,6 +387,7 @@ Item {
     onError: function(error) {
       root.faceAttemptTimer.stop()
       root.faceAuthenticating = false
+      root.faceCooldownTimer.restart()
     }
   }
 
@@ -392,14 +398,23 @@ Item {
     onTriggered: {
       if (facePam.active) facePam.abort()
       root.faceAuthenticating = false
+      root.faceCooldownTimer.restart()
     }
+  }
+
+  // Cooldown between face attempts: wake events can fire many times a second,
+  // and each attempt powers the camera for up to the attempt timeout.
+  Timer {
+    id: faceCooldownTimer
+    interval: 2000
+    repeat: false
   }
 
   Timer {
     id: resumeDetectionTimer
     interval: 1000
     repeat: true
-    running: root.lockRequested
+    running: root.lockRequested && facePamConfigured
     property double lastTick: 0
 
     onRunningChanged: lastTick = Date.now()

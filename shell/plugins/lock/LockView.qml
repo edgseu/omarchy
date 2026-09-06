@@ -28,8 +28,10 @@ Item {
   readonly property int passwordDotFontSize: Math.round(Style.font.heading * 1.33)
   readonly property int passwordDotLetterSpacing: Math.round(Style.font.heading * 0.19)
   // Space to keep clear on each side of the field for auth indicators (icons
-  // plus gaps) so centered dots never run under them.
-  readonly property real fingerprintReserve: (fingerprintConfigured ? Math.round(18 + 8) : 0) + (facePamConfigured ? Math.round(18 + 8) : 0)
+  // plus gaps) so centered dots never run under them. Measured from the
+  // actual glyphs — they scale with the field font.
+  readonly property real fingerprintReserve: (fingerprintConfigured ? Math.round(fingerprintIcon.implicitWidth + 8) : 0)
+    + (facePamConfigured ? Math.round(faceIcon.implicitWidth + 8) : 0)
   // Shrink the dots to fit once the password outgrows the field, so every
   // keystroke stays visible — otherwise long passwords clip with no feedback.
   readonly property real passwordDotScale: dotMetrics.advanceWidth > 0
@@ -196,12 +198,14 @@ Item {
       Text {
         textFormat: Text.PlainText
         anchors.fill: passwordInput
-        text: root.authenticatingPassword ? "Checking…" : (root.failureMessage.length > 0 ? root.failureMessage : (root.faceAuthenticating ? "Scanning face…" : root.placeholderText))
+        // Failure text wins over both scanning states so error styling stays
+        // coherent even while a parallel face scan is running.
+        text: root.failureMessage.length > 0 ? root.failureMessage : (root.authenticatingPassword ? "Checking…" : (root.faceAuthenticating ? "Scanning face…" : root.placeholderText))
         visible: passwordInput.text.length === 0
-        color: root.faceAuthenticating ? Color.lock.text : (root.authenticatingPassword ? Color.lock.text : (root.failureMessage.length > 0 ? Color.lock.textError : Color.lock.placeholder))
+        color: root.failureMessage.length > 0 ? Color.lock.textError : (root.faceAuthenticating || root.authenticatingPassword ? Color.lock.text : Color.lock.placeholder)
         font.family: Style.font.family
         font.pixelSize: root.fieldFontSize
-        font.italic: !root.authenticatingPassword && root.failureMessage.length > 0
+        font.italic: root.failureMessage.length > 0
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
@@ -241,12 +245,5 @@ Item {
         }
       }
     }
-  }
-
-  MouseArea {
-    anchors.fill: parent
-    hoverEnabled: true
-    acceptedButtons: Qt.NoButton
-    onPositionChanged: root.wakeRequested()
   }
 }
