@@ -21,14 +21,19 @@ configure_ir_emitter() {
 }
 
 resolve_howdy_config() {
-  # The PAM module reads $HOWDY_DIR/config.ini, but Howdy builds have been
-  # seen writing their config and models to /usr/local/etc/howdy instead.
-  # Return whichever config actually exists, preferring the module's path.
-  if [[ -f $HOWDY_DIR/config.ini ]]; then
-    echo "$HOWDY_DIR/config.ini"
-  elif [[ -f /usr/local/etc/howdy/config.ini ]]; then
-    echo "/usr/local/etc/howdy/config.ini"
-  fi
+  # The config home moved between Howdy builds: master (r592+) uses
+  # /etc/howdy, the older packaged layout used /lib/security/howdy, and the
+  # beta was seen writing to /usr/local/etc/howdy. Probe all three and return
+  # whichever config this build actually created — the CLI and its PAM module
+  # always agree with each other.
+  local config
+  for config in /etc/howdy/config.ini "$HOWDY_DIR/config.ini" /usr/local/etc/howdy/config.ini; do
+    if [[ -f $config ]]; then
+      echo "$config"
+      return 0
+    fi
+  done
+  return 1
 }
 
 configure_howdy_settings() {
@@ -112,9 +117,18 @@ verify_camera_capture() {
 
 verify_enrollment() {
   # Enrollment must leave a model behind; an empty models directory means the
-  # enrollment silently failed and PAM would have nothing to match.
-  local dir
-  for dir in "$HOWDY_DIR/models" /usr/local/etc/howdy/models; do
+  # enrollment silently failed and PAM would have nothing to match. The
+  # models home tracks whichever config location this build uses, so probe
+  # the resolved location first and then every known one.
+  local config dir
+  config=$(resolve_howdy_config) || config=""
+  if [[ -n $config ]]; then
+    dir="$(dirname "$config")/models"
+    if [[ -d $dir ]] && [[ -n $(ls -A "$dir" 2>/dev/null) ]]; then
+      return 0
+    fi
+  fi
+  for dir in /etc/howdy/models "$HOWDY_DIR/models" /usr/local/etc/howdy/models; do
     if [[ -d $dir ]] && [[ -n $(ls -A "$dir" 2>/dev/null) ]]; then
       return 0
     fi
@@ -164,22 +178,28 @@ if ! verify_camera_capture; then
   exit 1
 fi
 
-# Enroll initial model
-echo -e "\e[32m\nStep 1: Baseline Face Model\e[0m"
-echo -e "Look straight at the camera with normal lighting.\n"
+# Enroll the baseline model, unless this build already has one (the setup is
+# idempotent — e.g. re-running to repair the PAM configuration).
+if verify_enrollment; then
+  echo -e "\e[32mExisting face model found; skipping enrollment.\e[0m"
+else
+  echo -e "\e[32m\nStep 1: Baseline Face Model\e[0m"
+  echo -e "Look straight at the camera with normal lighting.\n"
 
-if sudo howdy add; then
-  normalize_howdy_paths
-  if ! verify_enrollment; then
-    echo -e "\e[31mEnrollment completed but no face model was stored. Please try again.\e[0m"
+  if sudo howdy add; then
+    if ! verify_enrollment; then
+      echo -e "\e[31mEnrollment completed but no face model was stored. Please try again.\e[0m"
+      exit 1
+    fi
+    echo -e "\e[32m\nBaseline model enrolled successfully!\e[0m"
+  else
+    echo -e "\e[31m\nFace enrollment failed. Please try again.\e[0m"
     exit 1
   fi
-  setup_lock_howdy_pam
-  echo -e "\e[32m\nBaseline model enrolled successfully!\e[0m"
-else
-  echo -e "\e[31m\nFace enrollment failed. Please try again.\e[0m"
-  exit 1
 fi
+
+normalize_howdy_paths
+setup_lock_howdy_pam
 
 # Offer optional multi-angle / lighting enrollment
 echo -e "\n\e[34mTip: Enrolling a second angle (e.g. low-light or slouched posture) ensures instant unlock in all conditions.\e[0m"

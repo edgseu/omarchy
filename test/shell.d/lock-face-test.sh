@@ -43,21 +43,25 @@ if ! grep -q "pam_howdy.so is missing" "$SETUP"; then
 fi
 pass "setup refuses to enable face PAM when the module is absent"
 
-# Howdy's config lives under /lib/security/howdy on Arch, not /etc/howdy.
-if ! grep -q 'HOWDY_DIR="/lib/security/howdy"' "$SETUP" || ! grep -q 'HOWDY_DIR="/lib/security/howdy"' "$REMOVE"; then
-  fail "setup and remove target the real Howdy config directory"
+# The Howdy config home moved between builds: master (r592+) uses /etc/howdy,
+# the older packaged layout /lib/security/howdy, and the beta
+# /usr/local/etc/howdy. The wizard must probe all three.
+if ! grep -q "/etc/howdy/config.ini" "$SETUP" || ! grep -q 'HOWDY_DIR="/lib/security/howdy"' "$SETUP" || ! grep -q "/usr/local/etc/howdy/config.ini" "$SETUP"; then
+  fail "setup probes every documented Howdy config location"
 fi
-pass "setup and remove target the real Howdy config directory"
+pass "setup probes every documented Howdy config location"
 
-if ! grep -q '"$HOWDY_DIR/config.ini"' "$SETUP"; then
-  fail "setup tunes the Howdy config under that directory"
+if ! grep -q 'HOWDY_DIR="/lib/security/howdy"' "$REMOVE"; then
+  fail "remove targets the packaged Howdy config directory"
 fi
-pass "setup tunes the Howdy config under that directory"
+pass "remove targets the packaged Howdy config directory"
 
-if grep -q '"/etc/howdy' "$SETUP" "$REMOVE"; then
-  fail "the nonexistent /etc/howdy config root must not be referenced"
+# The setup is idempotent: an existing face model skips enrollment so
+# re-running to repair PAM never adds duplicate models.
+if ! grep -q "Existing face model found; skipping enrollment" "$SETUP"; then
+  fail "setup skips enrollment when a face model already exists"
 fi
-pass "the nonexistent /etc/howdy config root must not be referenced"
+pass "setup skips enrollment when a face model already exists"
 
 # Some Howdy builds write config and models to /usr/local/etc/howdy while the
 # PAM module only reads /lib/security/howdy — the wizard must normalize that
