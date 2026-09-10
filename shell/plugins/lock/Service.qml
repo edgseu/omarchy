@@ -426,9 +426,9 @@ Item {
     }
 
     onError: function(error) {
-      root.faceAttemptTimer.stop()
+      faceAttemptTimer.stop()
       root.faceAuthenticating = false
-      root.faceCooldownTimer.restart()
+      faceCooldownTimer.restart()
     }
   }
 
@@ -439,7 +439,7 @@ Item {
     onTriggered: {
       if (facePam.active) facePam.abort()
       root.faceAuthenticating = false
-      root.faceCooldownTimer.restart()
+      faceCooldownTimer.restart()
     }
   }
 
