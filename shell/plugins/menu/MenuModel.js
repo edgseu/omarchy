@@ -388,7 +388,7 @@ function searchScore(items, entry, query) {
   var label = entry.label.toLowerCase()
   var nameText = nameSearchText(entry)
   var descriptionText = String(entry.description || "").toLowerCase()
-  var score = 80
+  var score = 120
 
   if (label === needle) score = entry.parent === "root" ? 2 : 0
   // An installed app whose name contains the query as a whole word ("zen"
@@ -399,14 +399,31 @@ function searchScore(items, entry, query) {
   else if (nameText.indexOf(needle) >= 0) score = 40
   else if (descriptionTextMatches(needle, descriptionText)) score = 60
   else {
-    // Fuzzy tiers rank behind every exact tier (0-60); the 80 default never
-    // competes because matchesQuery gates the list first. Name matches cap
+    // Fuzzy tiers rank behind every exact tier (0-60). Name matches cap
     // below the description tier so a scattered multi-term name match cannot
-    // invert name-over-description ordering.
+    // invert name-over-description ordering. Mixed name-and-description matches
+    // rank after pure name matches and before description-only matches.
     var nameFuzzyScore = fuzzyQueryScore(needle, nameText)
     var descriptionFuzzyScore = fuzzyQueryScore(needle, descriptionText)
-    if (nameFuzzyScore >= 0) score = Math.min(99, 70 + nameFuzzyScore)
-    else if (descriptionFuzzyScore >= 0) score = 100 + descriptionFuzzyScore
+    if (nameFuzzyScore >= 0) {
+      score = Math.min(99, 70 + nameFuzzyScore)
+    } else {
+      var terms = queryTerms(needle)
+      var mixedScore = 0
+      var mixedMatches = terms.length > 0
+      var hasName = false
+      var hasDesc = false
+      for (var t = 0; t < terms.length; t++) {
+        if (!terms[t]) continue
+        var sName = fuzzyTextScore(terms[t], nameText)
+        var sDesc = fuzzyTextScore(terms[t], descriptionText)
+        if (sName >= 0) { mixedScore += sName; hasName = true }
+        else if (sDesc >= 0) { mixedScore += sDesc + 10; hasDesc = true }
+        else { mixedMatches = false; break }
+      }
+      if (mixedMatches && hasName && hasDesc) score = Math.min(99, 85 + mixedScore)
+      else if (descriptionFuzzyScore >= 0) score = 100 + descriptionFuzzyScore
+    }
   }
   if (entry.kind === "menu" || entry.kind === "link") score -= 2
   // App rows sort after all menu items, so they lose the tiebreak below to an
@@ -417,6 +434,13 @@ function searchScore(items, entry, query) {
 }
 
 function displayRow(items, itemOrder, checkedResults, disabledResults, entry, detail, score, section) {
+  if (typeof entry === "string" || typeof entry === "number" || (entry === undefined && disabledResults && disabledResults.id)) {
+    section = score
+    score = detail
+    detail = entry
+    entry = disabledResults
+    disabledResults = null
+  }
   var target = entry.kind === "link" ? entry.target : entry.id
   return {
     itemId: entry.id,

@@ -119,6 +119,12 @@ assert(menu.fuzzyTextScore('....', '....') >= 1, 'delimiter-only verbatim matche
 assert(menu.matchesQuery({ id: 'test.row', label: 'a.b.c' }, 'a.b.c', true), 'menu keeps rows findable by their exact delimiter text')
 const cappedEntry = { id: 'test.cap', label: 'a b c d e f g h', order: 0 }
 assert(menu.searchScore([cappedEntry], cappedEntry, 'a b c d f g') < 100 * 1000, 'fuzzy name matches cap below the description tier')
+const mixedEntry = { id: 'test.mixed', label: 'Theme picker', description: 'Appearance and colors', kind: 'action', order: 0 }
+const mixedItems = { 'test.mixed': mixedEntry }
+assert(menu.matchesQuery(mixedEntry, 'thm colors', true), 'menu matches multi-term queries across name and description')
+assert(menu.searchScore(mixedItems, mixedEntry, 'thm pick') < menu.searchScore(mixedItems, mixedEntry, 'thm colors'), 'pure name fuzzy matches score ahead of mixed name-and-description matches')
+assert(menu.searchScore(mixedItems, mixedEntry, 'thm colors') < menu.searchScore(mixedItems, mixedEntry, 'appr'), 'mixed name-and-description matches score ahead of pure description fuzzy matches')
+assert(menu.searchScore(mixedItems, mixedEntry, 'appr') < menu.searchScore(mixedItems, mixedEntry, 'zzz'), 'pure description fuzzy matches score ahead of unmatched fallback')
 
 assertDeepEqual(
   menu.displayRow(merged.items, merged.itemOrder, {}, {}, entry, 'Style', 12, 'search'),
@@ -141,6 +147,28 @@ assertDeepEqual(
     section: 'search'
   },
   'menu builds display rows'
+)
+assertDeepEqual(
+  menu.displayRow(merged.items, merged.itemOrder, {}, entry, 'Style', 12, 'search'),
+  {
+    itemId: 'style.theme',
+    disabled: false,
+    kind: 'action',
+    icon: '',
+    iconFont: '',
+    appIcon: '',
+    appId: '',
+    label: 'Theme picker',
+    target: 'style.theme',
+    detail: 'Style',
+    path: 'Style › Theme picker',
+    childCount: 0,
+    action: 'custom-theme',
+    provider: '',
+    score: 12,
+    section: 'search'
+  },
+  'menu builds display rows when called with 7 arguments (omitting disabledResults)'
 )
 
 const defaultItems = menu.parseMenuJsonc(defaultMenuJsonc)
