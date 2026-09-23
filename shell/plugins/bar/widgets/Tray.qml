@@ -11,7 +11,11 @@ BarWidget {
   id: root
   moduleName: "omarchy.tray"
 
-  property bool expanded: false
+  property bool drawerPinned: false
+  property bool drawerAreaHovered: false
+  property bool drawerHoverSuppressed: false
+  readonly property bool drawerHovered: drawerAreaHovered && !drawerHoverSuppressed
+  readonly property bool expanded: drawerPinned || drawerHovered
   property bool managePopupOpen: false
   property bool trayMenuOpen: false
   property var activeTrayItem: null
@@ -112,6 +116,16 @@ BarWidget {
   function close() {
     managePopupOpen = false
     trayMenuOpen = false
+  }
+
+  function toggleExpanded() {
+    if (drawerPinned) {
+      drawerPinned = false
+      drawerHoverSuppressed = true
+    } else {
+      drawerPinned = true
+      drawerHoverSuppressed = false
+    }
   }
 
   function openTrayMenu(item, anchorItem, mouse) {
@@ -260,7 +274,10 @@ BarWidget {
         visible: root.allItems.length > 0
 
         HoverHandler {
-          onHoveredChanged: root.expanded = hovered
+          onHoveredChanged: {
+            root.drawerAreaHovered = hovered
+            if (!hovered) root.drawerHoverSuppressed = false
+          }
         }
 
         BarIconButton {
@@ -274,7 +291,7 @@ BarWidget {
             if (button === Qt.RightButton) {
               root.managePopupOpen = !root.managePopupOpen
             } else if (button === Qt.LeftButton) {
-              root.expanded = !root.expanded
+              root.toggleExpanded()
             }
           }
         }
@@ -346,7 +363,10 @@ BarWidget {
         visible: root.allItems.length > 0
 
         HoverHandler {
-          onHoveredChanged: root.expanded = hovered
+          onHoveredChanged: {
+            root.drawerAreaHovered = hovered
+            if (!hovered) root.drawerHoverSuppressed = false
+          }
         }
 
         BarIconButton {
@@ -361,7 +381,7 @@ BarWidget {
             if (button === Qt.RightButton) {
               root.managePopupOpen = !root.managePopupOpen
             } else if (button === Qt.LeftButton) {
-              root.expanded = !root.expanded
+              root.toggleExpanded()
             }
           }
         }
