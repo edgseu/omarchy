@@ -30,7 +30,7 @@ BarWidget {
   readonly property int drawerExtent: drawerCount > 0 ? drawerCount * trayItemExtent + (drawerCount - 1) * trayItemGap : 0
   // Match Waybar's group/tray-expander drawer transition-duration.
   readonly property int animationDuration: 600
-  property real revealProgress: expanded ? 1 : 0
+  property real revealProgress: (expanded || managePopupOpen || trayMenuOpen) ? 1 : 0
   readonly property real revealExtent: drawerExtent * revealProgress
 
   // Submenu drill-down state. QsMenuEntry.display() renders a *platform* menu,
@@ -269,9 +269,13 @@ BarWidget {
           width: implicitWidth
           height: implicitHeight
           x: root.drawerExtent - root.revealExtent
-          text: "\uf053"
+          text: (root.expanded || root.managePopupOpen || root.trayMenuOpen) ? "\uf054" : "\uf053"
           onPressed: function(button) {
-            if (button === Qt.RightButton) root.managePopupOpen = !root.managePopupOpen
+            if (button === Qt.RightButton) {
+              root.managePopupOpen = !root.managePopupOpen
+            } else if (button === Qt.LeftButton) {
+              root.expanded = !root.expanded
+            }
           }
         }
 
@@ -351,10 +355,14 @@ BarWidget {
           width: implicitWidth
           height: implicitHeight
           y: root.drawerExtent - root.revealExtent
-          text: "\uf053"
+          text: (root.expanded || root.managePopupOpen || root.trayMenuOpen) ? "\uf054" : "\uf053"
           textRotation: 90
           onPressed: function(button) {
-            if (button === Qt.RightButton) root.managePopupOpen = !root.managePopupOpen
+            if (button === Qt.RightButton) {
+              root.managePopupOpen = !root.managePopupOpen
+            } else if (button === Qt.LeftButton) {
+              root.expanded = !root.expanded
+            }
           }
         }
 
