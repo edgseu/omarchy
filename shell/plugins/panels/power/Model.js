@@ -74,7 +74,7 @@ function chargeThresholdActive(device, onBattery, states) {
     (isFinite(timeToFull) && timeToFull >= 8 * 60 * 60)
 }
 
-function batteryIcon(device, onBattery, states) {
+function batteryIcon(device, onBattery, states, profile) {
   var d = device || {}
   if (!d.isPresent) return ""
 
@@ -85,12 +85,16 @@ function batteryIcon(device, onBattery, states) {
   var index = Math.max(0, Math.min(9, Math.floor(d.percentage * 10)))
   var threshold = chargeThresholdActive(d, onBattery, states)
 
-  // battery-plus (U+F17E6) marks a charge-limit hold: a full battery with a
-  // plus, reading as "limit" next to the bolt used while actively charging.
-  if (threshold) return "󱟦"
+  // Stepped battery level with superscript plus (U+207A) for charge-limit hold.
+  if (threshold) return defaultIcons[index] + "⁺"
   // battery-check (U+F17E2): charged and holding, not actively charging.
   if (d.state === states.FullyCharged) return "󱟢"
   if (!onBattery) return chargingIcons[index]
+  var p = String(profile || "").toLowerCase()
+  // leaf (U+F032A): power-saver profile modifier on battery.
+  if (p === "power-saver") return defaultIcons[index] + "󰌪"
+  // speedometer (U+F04C5): performance profile modifier on battery.
+  if (p === "performance") return defaultIcons[index] + "󰓅"
   return defaultIcons[index]
 }
 

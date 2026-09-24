@@ -34,8 +34,22 @@ assertEqual(power.modeLabel({ isPresent: true, percentage: 1, state: states.Full
 assertEqual(power.modeLabel({ isPresent: true, percentage: 0.5, state: states.Discharging }, true, states), 'On battery', 'power labels battery mode')
 assertEqual(power.modeLabel({ isPresent: true, percentage: 0.5, state: states.Discharging }, false, states), 'Charging', 'power treats external power as newer than stale discharging state')
 assert(power.batteryIcon({ isPresent: true, percentage: 0.4, state: states.Charging }, false, states).length > 0, 'power maps battery icons')
-assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.PendingCharge }, false, states), '󱟦', 'power returns the battery-plus glyph at threshold')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.PendingCharge }, false, states), '󰂂⁺', 'power returns the stepped battery level with plus superscript at threshold')
 assertEqual(power.batteryIcon({ isPresent: true, percentage: 1, state: states.FullyCharged }, false, states), '󱟢', 'power returns the battery-check glyph when fully charged')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Discharging }, true, states, 'power-saver'), '󰂂󰌪', 'power returns the stepped battery level with leaf glyph in power-saver profile')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Discharging }, true, states, 'performance'), '󰂂󰓅', 'power returns the stepped battery level with speedometer glyph in performance profile')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Discharging }, true, states, 'Power-saver'), '󰂂󰌪', 'power matches power-saver profile case-insensitively')
+assertEqual(power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Discharging }, true, states, 'Performance'), '󰂂󰓅', 'power matches performance profile case-insensitively')
+assertEqual(
+  power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Discharging }, true, states, 'balanced'),
+  power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Discharging }, true, states),
+  'power falls back to default battery icon in balanced profile'
+)
+assertEqual(
+  power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Charging }, false, states, 'power-saver'),
+  power.batteryIcon({ isPresent: true, percentage: 0.8, state: states.Charging }, false, states),
+  'power prioritizes charging icon on AC over battery profile'
+)
 assertEqual(
   power.batteryIcon({ isPresent: true, percentage: 0.4, state: states.Discharging }, false, states),
   power.batteryIcon({ isPresent: true, percentage: 0.4, state: states.Charging, changeRate: 1.0, timeToFull: 120 }, false, states),
@@ -54,4 +68,5 @@ assert(/openPanelIndicatorWidth:.*showPercentage.*button\.glyphPaintedWidth : 0/
 assert(/IpcHandler[\s\S]*?function togglePercentage\(\) \{ root\.togglePercentage\(\) \}/.test(panelSource), 'power exposes togglePercentage over IPC')
 assert(/manageIpc: false/.test(panelSource), 'power owns its IPC handler so it can extend the target methods')
 assert(/PendingDischarge: UPowerDeviceState\.PendingDischarge/.test(panelSource), 'power maps PendingDischarge UPower state')
+assert(/Model\.batteryIcon\(device,\s*root\.discharging,\s*upowerStates\(\),\s*root\.activeProfile\)/.test(panelSource), 'power passes active profile to batteryIcon')
 JS
