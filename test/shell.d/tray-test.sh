@@ -27,14 +27,25 @@ JS
 
 run_node_test "tray drawer expand and pin invariants" <<'JS'
 const fs = require('fs')
+const tray = requireFromRoot('shell/plugins/bar/widgets/TrayModel.js')
 const traySource = fs.readFileSync(root + '/shell/plugins/bar/widgets/Tray.qml', 'utf8')
 
 assert(/property\s+bool\s+drawerPinned\s*:\s*false/.test(traySource), 'tray defines drawerPinned state')
 assert(/function\s+toggleExpanded\s*\(\)/.test(traySource), 'tray exposes toggleExpanded helper')
+assert(/TrayModel\.toggleExpandedState\(drawerPinned,\s*drawerAreaHovered\)/.test(traySource), 'toggleExpanded delegates to TrayModel.toggleExpandedState')
+assert(/readonly\s+property\s+bool\s+drawerHovered\s*:\s*TrayModel\.drawerHovered\(/.test(traySource), 'drawerHovered delegates to TrayModel')
+assert(/readonly\s+property\s+bool\s+expanded\s*:\s*TrayModel\.drawerExpanded\(/.test(traySource), 'expanded delegates to TrayModel')
+assert(/property\s+real\s+revealProgress\s*:\s*TrayModel\.drawerRevealProgress\(/.test(traySource), 'revealProgress delegates to TrayModel')
 assert(!/onHoveredChanged:\s*root\.expanded\s*=\s*hovered/.test(traySource), 'hover-exit does not unconditionally overwrite root.expanded')
-assert(/drawerPinned\s*\|\|\s*drawerHovered/.test(traySource), 'expanded condition includes drawerPinned or drawerHovered')
 
-class TrayStateSimulator {
+// Ensure both horizontal and vertical layouts wire expandIcon and HoverHandler
+const hoverMatches = traySource.match(/root\.drawerAreaHovered\s*=\s*hovered[\s\S]*?root\.drawerHoverSuppressed\s*=\s*false/g) || []
+assertEqual(hoverMatches.length, 2, 'both horizontal and vertical HoverHandlers manage hover and reset suppression')
+
+const toggleMatches = traySource.match(/root\.toggleExpanded\(\)/g) || []
+assertEqual(toggleMatches.length, 2, 'both horizontal and vertical expandIcons invoke toggleExpanded on left-click')
+
+class TrayState {
   constructor() {
     this.drawerPinned = false
     this.drawerAreaHovered = false
@@ -43,30 +54,26 @@ class TrayStateSimulator {
     this.trayMenuOpen = false
   }
   get drawerHovered() {
-    return this.drawerAreaHovered && !this.drawerHoverSuppressed
+    return tray.drawerHovered(this.drawerAreaHovered, this.drawerHoverSuppressed)
   }
   get expanded() {
-    return this.drawerPinned || this.drawerHovered
+    return tray.drawerExpanded(this.drawerPinned, this.drawerHovered)
   }
   get revealProgress() {
-    return (this.expanded || this.managePopupOpen || this.trayMenuOpen) ? 1 : 0
+    return tray.drawerRevealProgress(this.expanded, this.managePopupOpen, this.trayMenuOpen)
   }
   setHovered(hovered) {
     this.drawerAreaHovered = hovered
     if (!hovered) this.drawerHoverSuppressed = false
   }
   toggleExpanded() {
-    if (this.drawerPinned) {
-      this.drawerPinned = false
-      this.drawerHoverSuppressed = true
-    } else {
-      this.drawerPinned = true
-      this.drawerHoverSuppressed = false
-    }
+    const next = tray.toggleExpandedState(this.drawerPinned, this.drawerAreaHovered)
+    this.drawerPinned = next.drawerPinned
+    this.drawerHoverSuppressed = next.drawerHoverSuppressed
   }
 }
 
-const sim = new TrayStateSimulator()
+const sim = new TrayState()
 assertEqual(sim.expanded, false, 'initially collapsed')
 assertEqual(sim.revealProgress, 0, 'reveal progress initially 0')
 
@@ -108,10 +115,26 @@ sim.setHovered(true)
 assertEqual(sim.expanded, true, 'subsequent hover re-opens drawer')
 sim.setHovered(false)
 
-// Touch tap (click without prior hover)
+// Touch tap sequence (click without hover)
 sim.toggleExpanded()
 assertEqual(sim.drawerPinned, true, 'touch tap pins open')
 assertEqual(sim.expanded, true, 'touch tap expands')
 sim.toggleExpanded()
 assertEqual(sim.drawerPinned, false, 'second touch tap unpins')
+assertEqual(sim.drawerHoverSuppressed, false, 'hover suppression is not set when unpinning without hover')
+
+// Mouse enters after touch tap unpin
+sim.setHovered(true)
+assertEqual(sim.drawerHovered, true, 'mouse hover works immediately after tap unpin')
+assertEqual(sim.expanded, true, 'drawer reveals on hover after tap unpin')
+sim.setHovered(false)
+
+// Open manage popup or tray item menu keeps drawer revealed
+sim.managePopupOpen = true
+assertEqual(sim.revealProgress, 1, 'manage popup keeps drawer revealed')
+sim.managePopupOpen = false
+sim.trayMenuOpen = true
+assertEqual(sim.revealProgress, 1, 'tray item menu keeps drawer revealed')
+sim.trayMenuOpen = false
+assertEqual(sim.revealProgress, 0, 'closing menus restores collapsed progress when unpinned')
 JS

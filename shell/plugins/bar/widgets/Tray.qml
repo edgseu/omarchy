@@ -14,8 +14,8 @@ BarWidget {
   property bool drawerPinned: false
   property bool drawerAreaHovered: false
   property bool drawerHoverSuppressed: false
-  readonly property bool drawerHovered: drawerAreaHovered && !drawerHoverSuppressed
-  readonly property bool expanded: drawerPinned || drawerHovered
+  readonly property bool drawerHovered: TrayModel.drawerHovered(drawerAreaHovered, drawerHoverSuppressed)
+  readonly property bool expanded: TrayModel.drawerExpanded(drawerPinned, drawerHovered)
   property bool managePopupOpen: false
   property bool trayMenuOpen: false
   property var activeTrayItem: null
@@ -34,7 +34,7 @@ BarWidget {
   readonly property int drawerExtent: drawerCount > 0 ? drawerCount * trayItemExtent + (drawerCount - 1) * trayItemGap : 0
   // Match Waybar's group/tray-expander drawer transition-duration.
   readonly property int animationDuration: 600
-  property real revealProgress: (expanded || managePopupOpen || trayMenuOpen) ? 1 : 0
+  property real revealProgress: TrayModel.drawerRevealProgress(expanded, managePopupOpen, trayMenuOpen)
   readonly property real revealExtent: drawerExtent * revealProgress
 
   // Submenu drill-down state. QsMenuEntry.display() renders a *platform* menu,
@@ -119,13 +119,9 @@ BarWidget {
   }
 
   function toggleExpanded() {
-    if (drawerPinned) {
-      drawerPinned = false
-      drawerHoverSuppressed = true
-    } else {
-      drawerPinned = true
-      drawerHoverSuppressed = false
-    }
+    var next = TrayModel.toggleExpandedState(drawerPinned, drawerAreaHovered)
+    drawerPinned = next.drawerPinned
+    drawerHoverSuppressed = next.drawerHoverSuppressed
   }
 
   function openTrayMenu(item, anchorItem, mouse) {
