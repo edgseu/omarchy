@@ -330,14 +330,22 @@ function fuzzyTextScore(term, text) {
   var nLen = needle.length
   var hLen = haystack.length
   if (nLen > hLen) return -1
+  // Fast pre-check: if characters do not appear in order at all,
+  // exit immediately without allocating DP buffers or scanning alignments.
+  var quickPos = -1
+  for (var c = 0; c < nLen; c++) {
+    quickPos = haystack.indexOf(needle.charAt(c), quickPos + 1)
+    if (quickPos < 0) return -1
+  }
 
   function isWordStart(pos) {
     return pos === 0 || /[\s._:/\\-]/.test(haystack.charAt(pos - 1))
   }
 
-  // dp[j] tracks the minimum accumulated score matching needle[0..i]
-  // with needle[i] aligned at haystack[j].
+  // Reusable double buffers to track the minimum accumulated score
+  // without per-character allocations.
   var dp = new Array(hLen)
+  var nextDp = new Array(hLen)
   var ch0 = needle.charAt(0)
   for (var j = 0; j < hLen; j++) {
     dp[j] = haystack.charAt(j) === ch0 ? (isWordStart(j) ? -4 : 0) : Infinity
@@ -345,7 +353,6 @@ function fuzzyTextScore(term, text) {
 
   for (var i = 1; i < nLen; i++) {
     var ch = needle.charAt(i)
-    var nextDp = new Array(hLen)
     var runningMin = Infinity
 
     for (var k = 0; k < hLen; k++) {
@@ -361,7 +368,9 @@ function fuzzyTextScore(term, text) {
         nextDp[k] = Infinity
       }
     }
+    var tmp = dp
     dp = nextDp
+    nextDp = tmp
   }
 
   var minScore = Infinity
