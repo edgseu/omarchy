@@ -37,7 +37,9 @@ assert(/drawerPinned\s*=\s*next\.drawerPinned/.test(traySource), 'toggleExpanded
 assert(/drawerHoverSuppressed\s*=\s*next\.drawerHoverSuppressed/.test(traySource), 'toggleExpanded assigns drawerHoverSuppressed from next state')
 assert(/readonly\s+property\s+bool\s+drawerHovered\s*:\s*TrayModel\.drawerHovered\(\s*drawerAreaHovered,\s*drawerHoverSuppressed\s*\)/.test(traySource), 'drawerHovered delegates with drawerAreaHovered and drawerHoverSuppressed')
 assert(/readonly\s+property\s+bool\s+expanded\s*:\s*TrayModel\.drawerExpanded\(\s*drawerPinned,\s*drawerHovered\s*\)/.test(traySource), 'expanded delegates with drawerPinned and drawerHovered')
-assert(/property\s+real\s+revealProgress\s*:\s*TrayModel\.drawerRevealProgress\(\s*expanded,\s*managePopupOpen,\s*trayMenuOpen\s*\)/.test(traySource), 'revealProgress delegates with expanded, managePopupOpen, and trayMenuOpen')
+assert(/readonly\s+property\s+bool\s+managePopupVisible\s*:\s*managePopup\s*\?\s*managePopup\.visible\s*:\s*false/.test(traySource), 'managePopupVisible tracks popup card visibility')
+assert(/readonly\s+property\s+bool\s+trayMenuVisible\s*:\s*trayMenuPopup\s*\?\s*trayMenuPopup\.visible\s*:\s*false/.test(traySource), 'trayMenuVisible tracks tray menu card visibility')
+assert(/property\s+real\s+revealProgress\s*:\s*TrayModel\.drawerRevealProgress\(\s*expanded,\s*managePopupVisible,\s*trayMenuVisible\s*\)/.test(traySource), 'revealProgress delegates with expanded, managePopupVisible, and trayMenuVisible')
 assert(!/onHoveredChanged:\s*root\.expanded\s*=\s*hovered/.test(traySource), 'hover-exit does not unconditionally overwrite root.expanded')
 
 // Ensure both horizontal and vertical layouts wire expandIcon and HoverHandler
@@ -47,13 +49,16 @@ assertEqual(hoverMatches.length, 2, 'both horizontal and vertical HoverHandlers 
 const toggleMatches = traySource.match(/root\.toggleExpanded\(\)/g) || []
 assertEqual(toggleMatches.length, 2, 'both horizontal and vertical expandIcons invoke toggleExpanded on left-click')
 
+const chevronMatches = traySource.match(/\(root\.expanded\s*\|\|\s*root\.managePopupVisible\s*\|\|\s*root\.trayMenuVisible\)\s*\?\s*"\\uf054"\s*:\s*"\\uf053"/g) || []
+assertEqual(chevronMatches.length, 2, 'both horizontal and vertical chevrons flip on effective-open condition')
+
 class TrayState {
   constructor() {
     this.drawerPinned = false
     this.drawerAreaHovered = false
     this.drawerHoverSuppressed = false
-    this.managePopupOpen = false
-    this.trayMenuOpen = false
+    this.managePopupVisible = false
+    this.trayMenuVisible = false
   }
   get drawerHovered() {
     return tray.drawerHovered(this.drawerAreaHovered, this.drawerHoverSuppressed)
@@ -62,7 +67,7 @@ class TrayState {
     return tray.drawerExpanded(this.drawerPinned, this.drawerHovered)
   }
   get revealProgress() {
-    return tray.drawerRevealProgress(this.expanded, this.managePopupOpen, this.trayMenuOpen)
+    return tray.drawerRevealProgress(this.expanded, this.managePopupVisible, this.trayMenuVisible)
   }
   setHovered(hovered) {
     this.drawerAreaHovered = hovered
@@ -132,11 +137,12 @@ assertEqual(sim.expanded, true, 'drawer reveals on hover after tap unpin')
 sim.setHovered(false)
 
 // Open manage popup or tray item menu keeps drawer revealed
-sim.managePopupOpen = true
-assertEqual(sim.revealProgress, 1, 'manage popup keeps drawer revealed')
-sim.managePopupOpen = false
-sim.trayMenuOpen = true
-assertEqual(sim.revealProgress, 1, 'tray item menu keeps drawer revealed')
-sim.trayMenuOpen = false
-assertEqual(sim.revealProgress, 0, 'closing menus restores collapsed progress when unpinned')
+sim.managePopupVisible = true
+assertEqual(sim.revealProgress, 1, 'manage popup keeps drawer revealed during display and fade')
+sim.managePopupVisible = false
+assertEqual(sim.revealProgress, 0, 'closing manage popup collapses drawer after fade completes')
+sim.trayMenuVisible = true
+assertEqual(sim.revealProgress, 1, 'tray item menu keeps drawer revealed during display and fade')
+sim.trayMenuVisible = false
+assertEqual(sim.revealProgress, 0, 'closing tray menu collapses drawer after fade completes')
 JS

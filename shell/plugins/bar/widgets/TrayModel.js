@@ -59,8 +59,8 @@ function drawerExpanded(drawerPinned, drawerHovered) {
   return Boolean(drawerPinned || drawerHovered)
 }
 
-function drawerRevealProgress(expanded, managePopupOpen, trayMenuOpen) {
-  return (expanded || managePopupOpen || trayMenuOpen) ? 1 : 0
+function drawerRevealProgress(expanded, managePopupVisible, trayMenuVisible) {
+  return (expanded || managePopupVisible || trayMenuVisible) ? 1 : 0
 }
 
 if (typeof module !== "undefined") {

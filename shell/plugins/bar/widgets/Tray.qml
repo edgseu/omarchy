@@ -14,10 +14,15 @@ BarWidget {
   property bool drawerPinned: false
   property bool drawerAreaHovered: false
   property bool drawerHoverSuppressed: false
+  onDrawerAreaHoveredChanged: {
+    if (!drawerAreaHovered) drawerHoverSuppressed = false
+  }
   readonly property bool drawerHovered: TrayModel.drawerHovered(drawerAreaHovered, drawerHoverSuppressed)
   readonly property bool expanded: TrayModel.drawerExpanded(drawerPinned, drawerHovered)
   property bool managePopupOpen: false
   property bool trayMenuOpen: false
+  readonly property bool managePopupVisible: managePopup ? managePopup.visible : false
+  readonly property bool trayMenuVisible: trayMenuPopup ? trayMenuPopup.visible : false
   property var activeTrayItem: null
   property var activeTrayAnchor: null
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -34,7 +39,7 @@ BarWidget {
   readonly property int drawerExtent: drawerCount > 0 ? drawerCount * trayItemExtent + (drawerCount - 1) * trayItemGap : 0
   // Match Waybar's group/tray-expander drawer transition-duration.
   readonly property int animationDuration: 600
-  property real revealProgress: TrayModel.drawerRevealProgress(expanded, managePopupOpen, trayMenuOpen)
+  property real revealProgress: TrayModel.drawerRevealProgress(expanded, managePopupVisible, trayMenuVisible)
   readonly property real revealExtent: drawerExtent * revealProgress
 
   // Submenu drill-down state. QsMenuEntry.display() renders a *platform* menu,
@@ -282,7 +287,7 @@ BarWidget {
           width: implicitWidth
           height: implicitHeight
           x: root.drawerExtent - root.revealExtent
-          text: (root.expanded || root.managePopupOpen || root.trayMenuOpen) ? "\uf054" : "\uf053"
+          text: (root.expanded || root.managePopupVisible || root.trayMenuVisible) ? "\uf054" : "\uf053"
           onPressed: function(button) {
             if (button === Qt.RightButton) {
               root.managePopupOpen = !root.managePopupOpen
@@ -371,7 +376,7 @@ BarWidget {
           width: implicitWidth
           height: implicitHeight
           y: root.drawerExtent - root.revealExtent
-          text: (root.expanded || root.managePopupOpen || root.trayMenuOpen) ? "\uf054" : "\uf053"
+          text: (root.expanded || root.managePopupVisible || root.trayMenuVisible) ? "\uf054" : "\uf053"
           textRotation: 90
           onPressed: function(button) {
             if (button === Qt.RightButton) {
