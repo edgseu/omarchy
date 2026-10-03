@@ -179,6 +179,9 @@ reconcile_audio_state() {
       # Locking hands off immediately, even if the audio query failed
       if session_is_locked; then
         detect_user_intent
+        if [[ -f $HANDSOFF_FILE ]]; then
+          return 0
+        fi
         if owns_idle_state; then
           rm -f "$IDLE_STATE_FILE"
         fi

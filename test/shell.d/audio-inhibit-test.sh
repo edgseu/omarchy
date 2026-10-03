@@ -397,3 +397,35 @@ wait "$fifo_pid" 2>/dev/null || true
 (( claimed == 1 )) ||
   fail "daemon claims stay-awake immediately on audio subscription event"
 pass "daemon claims stay-awake immediately on audio subscription event"
+
+# 20. Lock during a failed audio query does not overwrite an existing user hand-off
+write_pactl_stub '[]'
+write_lock_stub 1
+run_inhibit
+
+write_pactl_stub "$PLAYING"
+run_inhibit
+sleep 1.1
+touch "$STAY"
+run_inhibit
+[[ $(<"$HANDSOFF") == user ]] || fail "setup: hands-off is user before lock"
+
+cat >"$BIN_DIR/pactl" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+write_lock_stub 0
+run_inhibit
+
+[[ $(<"$HANDSOFF") == user ]] ||
+  fail "lock during failed audio query preserves existing user hands-off"
+pass "lock during failed audio query preserves existing user hands-off"
+
+[[ -f $STAY && $(<"$STAY") == user ]] ||
+  fail "user stay-awake token preserved during lock with failed audio query"
+pass "user stay-awake token preserved during lock with failed audio query"
+
+write_pactl_stub "$PLAYING"
+[[ $(status_inhibit) == "playing (stay-awake held by user)" ]] ||
+  fail "status reports stay-awake held by user after failed-query lock"
+pass "status reports stay-awake held by user after failed-query lock"

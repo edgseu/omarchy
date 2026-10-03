@@ -32,7 +32,7 @@ chmod +x "$work/bin/systemctl"
 
 migration="$ROOT/migrations/1788700025.sh"
 run_migration() {
-  HOME="$work/home" PATH="$work/bin:$PATH" bash -euo pipefail "$migration"
+  HOME="$work/home" PATH="$work/bin:$PATH" OMARCHY_PATH="$ROOT" bash -euo pipefail "$migration"
 }
 
 # 1. Graphical session enables and starts
@@ -46,6 +46,7 @@ pass "migration enables and starts service in active graphical session"
 TEST_TTY=1 run_migration
 wants_link="$work/home/.config/systemd/user/graphical-session.target.wants/omarchy-audio-inhibit.service"
 [[ -L $wants_link ]] || fail "TTY update creates graphical-session.target.wants symlink"
+[[ -e $wants_link ]] || fail "wants symlink resolves to an existing unit"
 if grep -F 'systemctl --user start' "$TEST_CALLS" >/dev/null; then
   fail "TTY migration must not start the service"
 fi
