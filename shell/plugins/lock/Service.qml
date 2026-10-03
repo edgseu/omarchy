@@ -477,7 +477,10 @@ Item {
     onRunningChanged: lastTick = Date.now()
     onTriggered: {
       var now = Date.now()
-      if (lastTick > 0 && now - lastTick > interval + 2000) root.startFace()
+      if (lastTick > 0 && now - lastTick > interval + 2000) {
+        root.faceAttempts = 0
+        root.startFace()
+      }
       lastTick = now
     }
   }
@@ -640,12 +643,16 @@ Item {
       // for, so the blank state has to be given up here or a visible lock
       // wallpaper stays frozen until the next keypress.
       root.displaysBlank = false
+      root.faceAttempts = 0
       root.requestSessionLock()
 
       // A monitor still coming up has no workspace, so cannot answer yet.
       strandedLockRetryTimer.rearm()
       root.checkStrandedLock()
-    }
+
+      if (root.lockRequested && root.facePamConfigured) {
+        root.startFace()
+      }
   }
 
   onAuthenticatingPasswordChanged: {

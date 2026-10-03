@@ -209,11 +209,25 @@ if ! sed -n '/function resetAuthenticationState/,/^[[:space:]]*}/p' "$SERVICE" |
   fail "resetAuthenticationState stops the face cooldown timer"
 fi
 pass "resetAuthenticationState stops the face cooldown timer"
-
 if ! grep -q "running: root.lockRequested && facePamConfigured" "$SERVICE"; then
   fail "resume detection only runs when face auth is configured"
 fi
 pass "resume detection only runs when face auth is configured"
+
+if ! sed -n '/id: resumeDetectionTimer/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "faceAttempts = 0"; then
+  fail "resumeDetectionTimer resets face attempts on resume"
+fi
+pass "resumeDetectionTimer resets face attempts on resume"
+
+if ! sed -n '/function onScreensChanged/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "faceAttempts = 0"; then
+  fail "onScreensChanged resets face attempts when screens change"
+fi
+pass "onScreensChanged resets face attempts when screens change"
+
+if ! sed -n '/function onScreensChanged/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "startFace()"; then
+  fail "onScreensChanged starts face scan when screens change"
+fi
+pass "onScreensChanged starts face scan when screens change"
 
 if ! grep -q 'config: "omarchy-lock-howdy"' "$SERVICE"; then
   fail "lock service declares the omarchy-lock-howdy PAM context"
