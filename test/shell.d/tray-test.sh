@@ -33,9 +33,11 @@ const traySource = fs.readFileSync(root + '/shell/plugins/bar/widgets/Tray.qml',
 assert(/property\s+bool\s+drawerPinned\s*:\s*false/.test(traySource), 'tray defines drawerPinned state')
 assert(/function\s+toggleExpanded\s*\(\)/.test(traySource), 'tray exposes toggleExpanded helper')
 assert(/TrayModel\.toggleExpandedState\(drawerPinned,\s*drawerAreaHovered\)/.test(traySource), 'toggleExpanded delegates to TrayModel.toggleExpandedState')
-assert(/readonly\s+property\s+bool\s+drawerHovered\s*:\s*TrayModel\.drawerHovered\(/.test(traySource), 'drawerHovered delegates to TrayModel')
-assert(/readonly\s+property\s+bool\s+expanded\s*:\s*TrayModel\.drawerExpanded\(/.test(traySource), 'expanded delegates to TrayModel')
-assert(/property\s+real\s+revealProgress\s*:\s*TrayModel\.drawerRevealProgress\(/.test(traySource), 'revealProgress delegates to TrayModel')
+assert(/drawerPinned\s*=\s*next\.drawerPinned/.test(traySource), 'toggleExpanded assigns drawerPinned from next state')
+assert(/drawerHoverSuppressed\s*=\s*next\.drawerHoverSuppressed/.test(traySource), 'toggleExpanded assigns drawerHoverSuppressed from next state')
+assert(/readonly\s+property\s+bool\s+drawerHovered\s*:\s*TrayModel\.drawerHovered\(\s*drawerAreaHovered,\s*drawerHoverSuppressed\s*\)/.test(traySource), 'drawerHovered delegates with drawerAreaHovered and drawerHoverSuppressed')
+assert(/readonly\s+property\s+bool\s+expanded\s*:\s*TrayModel\.drawerExpanded\(\s*drawerPinned,\s*drawerHovered\s*\)/.test(traySource), 'expanded delegates with drawerPinned and drawerHovered')
+assert(/property\s+real\s+revealProgress\s*:\s*TrayModel\.drawerRevealProgress\(\s*expanded,\s*managePopupOpen,\s*trayMenuOpen\s*\)/.test(traySource), 'revealProgress delegates with expanded, managePopupOpen, and trayMenuOpen')
 assert(!/onHoveredChanged:\s*root\.expanded\s*=\s*hovered/.test(traySource), 'hover-exit does not unconditionally overwrite root.expanded')
 
 // Ensure both horizontal and vertical layouts wire expandIcon and HoverHandler
