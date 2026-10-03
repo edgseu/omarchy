@@ -11,6 +11,11 @@
 
 set -euo pipefail
 
+if [[ ! -f /usr/lib/systemd/user/omarchy-audio-inhibit.service && -f $OMARCHY_PATH/default/systemd/user/omarchy-audio-inhibit.service ]]; then
+  mkdir -p "$HOME/.config/systemd/user"
+  cp "$OMARCHY_PATH/default/systemd/user/omarchy-audio-inhibit.service" "$HOME/.config/systemd/user/"
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable --now \
   bt-agent.service \
