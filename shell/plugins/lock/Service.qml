@@ -29,6 +29,8 @@ Item {
   property string pendingPassword: ""
   property string failureMessage: ""
   property int failedAttempts: 0
+  property int faceAttempts: 0
+  readonly property int maxFaceAttempts: 3
   property string backgroundPath: ""
   property int backgroundVersion: 0
   property string lastEvent: "init"
@@ -130,6 +132,7 @@ Item {
     pendingPassword = ""
     failureMessage = ""
     failedAttempts = 0
+    faceAttempts = 0
     authenticatingPassword = false
     faceAuthenticating = false
     fingerprintAuthenticating = false
@@ -182,6 +185,7 @@ Item {
 
   function runWake() {
     root.displaysBlank = false
+    root.faceAttempts = 0
     root.monitorDpmsKnown = false
     if (!wakeProcess.running) wakeProcess.running = true
     if (lockRequested) armBlankTimer()
@@ -190,6 +194,10 @@ Item {
   function runBlank() {
     root.displaysBlank = true
     root.monitorDpmsKnown = false
+    if (facePam.active) facePam.abort()
+    faceAttemptTimer.stop()
+    faceCooldownTimer.stop()
+    root.faceAuthenticating = false
     if (!blankProcess.running) blankProcess.running = true
   }
 
@@ -251,12 +259,14 @@ Item {
   }
 
   function startFace() {
-    if (!lockRequested || !sessionLock.secure || !facePamConfigured) return
+    if (!lockRequested || !sessionLock.secure || !facePamConfigured || root.displaysBlank) return
     if (facePam.active || faceAuthenticating) return
     // Rate-limit restarts (motion wake, resume) so a broken face stack cannot
     // turn every mouse movement into a PAM attempt with the camera on.
     if (faceCooldownTimer.running) return
+    if (faceAttempts >= maxFaceAttempts) return
 
+    faceAttempts += 1
     faceAuthenticating = true
     if (!facePam.start()) {
       faceAuthenticating = false
@@ -451,7 +461,7 @@ Item {
     interval: 2000
     repeat: false
     onTriggered: {
-      if (root.lockRequested && root.facePamConfigured) {
+      if (root.lockRequested && root.facePamConfigured && !root.displaysBlank && root.faceAttempts < root.maxFaceAttempts) {
         root.startFace()
       }
     }

@@ -180,6 +180,31 @@ if ! sed -n '/faceCooldownTimer/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "root.s
 fi
 pass "face cooldown timer retries face scan when expired"
 
+if ! sed -n '/function startFace/,/^  }/p' "$SERVICE" | grep -q "displaysBlank"; then
+  fail "startFace does not scan when display is blanked"
+fi
+pass "startFace does not scan when display is blanked"
+
+if ! sed -n '/function startFace/,/^  }/p' "$SERVICE" | grep -qE "faceAttempts.*maxFaceAttempts|maxFaceAttempts.*faceAttempts" || ! grep -q "maxFaceAttempts: 3" "$SERVICE"; then
+  fail "startFace bounds consecutive face scan attempts to 3"
+fi
+pass "startFace bounds consecutive face scan attempts to 3"
+
+if ! sed -n '/faceCooldownTimer/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "displaysBlank"; then
+  fail "face cooldown timer does not retry face scan when display is blanked"
+fi
+pass "face cooldown timer does not retry face scan when display is blanked"
+
+if ! sed -n '/function runBlank/,/^  }/p' "$SERVICE" | grep -q "facePam.active"; then
+  fail "runBlank aborts active face authentication"
+fi
+pass "runBlank aborts active face authentication"
+
+if ! sed -n '/function runWake/,/^  }/p' "$SERVICE" | grep -q "faceAttempts"; then
+  fail "runWake resets face attempts count"
+fi
+pass "runWake resets face attempts count"
+
 if ! sed -n '/function resetAuthenticationState/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "faceCooldownTimer.stop()"; then
   fail "resetAuthenticationState stops the face cooldown timer"
 fi
