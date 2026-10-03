@@ -30,7 +30,7 @@ Item {
   property string failureMessage: ""
   property int failedAttempts: 0
   property int faceAttempts: 0
-  readonly property int maxFaceAttempts: 3
+  readonly property int maxFaceAttempts: 2
   property string backgroundPath: ""
   property int backgroundVersion: 0
   property string lastEvent: "init"

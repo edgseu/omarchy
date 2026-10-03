@@ -185,10 +185,10 @@ if ! sed -n '/function startFace/,/^  }/p' "$SERVICE" | grep -q "displaysBlank";
 fi
 pass "startFace does not scan when display is blanked"
 
-if ! sed -n '/function startFace/,/^  }/p' "$SERVICE" | grep -qE "faceAttempts.*maxFaceAttempts|maxFaceAttempts.*faceAttempts" || ! grep -q "maxFaceAttempts: 3" "$SERVICE"; then
-  fail "startFace bounds consecutive face scan attempts to 3"
+if ! sed -n '/function startFace/,/^  }/p' "$SERVICE" | grep -qE "faceAttempts.*maxFaceAttempts|maxFaceAttempts.*faceAttempts" || ! grep -q "maxFaceAttempts: 2" "$SERVICE"; then
+  fail "startFace bounds consecutive face scan attempts to 2"
 fi
-pass "startFace bounds consecutive face scan attempts to 3"
+pass "startFace bounds consecutive face scan attempts to 2"
 
 if ! sed -n '/faceCooldownTimer/,/^[[:space:]]*}/p' "$SERVICE" | grep -q "displaysBlank"; then
   fail "face cooldown timer does not retry face scan when display is blanked"
