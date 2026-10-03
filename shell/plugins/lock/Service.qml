@@ -134,6 +134,7 @@ Item {
     faceAuthenticating = false
     fingerprintAuthenticating = false
     faceAttemptTimer.stop()
+    faceCooldownTimer.stop()
     fingerprintRetryTimer.stop()
     if (passwordPam.active) passwordPam.abort()
     if (facePam.active) facePam.abort()
@@ -449,6 +450,11 @@ Item {
     id: faceCooldownTimer
     interval: 2000
     repeat: false
+    onTriggered: {
+      if (root.lockRequested && root.facePamConfigured) {
+        root.startFace()
+      }
+    }
   }
 
   Timer {

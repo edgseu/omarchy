@@ -15,9 +15,17 @@ if [[ -f $PAM_FILE ]]; then
   sudo rm -f "$PAM_FILE"
 fi
 
-# The IR emitter helper ships its own unit; stop and disable it if present.
-if systemctl list-unit-files 2>/dev/null | grep -q linux-enable-ir-emitter; then
-  sudo systemctl disable --now linux-enable-ir-emitter.service >/dev/null 2>&1 || true
+# Only stop and disable the IR emitter unit if face setup enabled it.
+emitter_managed=false
+if [[ -f /var/lib/omarchy/face-ir-emitter-enabled ]] || [[ -f "$HOME/.local/state/omarchy/face-ir-emitter-enabled" ]]; then
+  emitter_managed=true
+fi
+if [[ $emitter_managed == "true" ]]; then
+  if systemctl list-unit-files 2>/dev/null | grep -q linux-enable-ir-emitter; then
+    sudo systemctl disable --now linux-enable-ir-emitter.service >/dev/null 2>&1 || true
+  fi
+  sudo rm -f /var/lib/omarchy/face-ir-emitter-enabled
+  omarchy-state clear face-ir-emitter-enabled 2>/dev/null || true
 fi
 
 echo "Removing Howdy packages..."
@@ -27,13 +35,11 @@ elif omarchy-pkg-present howdy; then
   omarchy-pkg-drop howdy
 fi
 
-# Enrolled face templates are biometric data; delete them with the package.
-if [[ -d $HOWDY_DIR/models ]]; then
-  echo "Deleting enrolled face models..."
-  sudo rm -rf "$HOWDY_DIR/models"
-fi
-if [[ -d /usr/local/etc/howdy/models ]]; then
-  sudo rm -rf /usr/local/etc/howdy/models
-fi
-
+# Enrolled face templates are biometric data; delete them across all supported directories.
+for models_dir in /etc/howdy/models "$HOWDY_DIR/models" /usr/local/etc/howdy/models; do
+  if [[ -d $models_dir ]]; then
+    echo "Deleting enrolled face models from $models_dir..."
+    sudo rm -rf "$models_dir"
+  fi
+done
 echo -e "\e[32mFace authentication has been completely removed.\e[0m"

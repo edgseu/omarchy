@@ -8,14 +8,21 @@ set -e
 HOWDY_DIR="/lib/security/howdy"
 PAM_FILE="/etc/pam.d/omarchy-lock-howdy"
 CAMERA_DEVICE=""
+TARGET_USER="${SUDO_USER:-$USER}"
 
 configure_ir_emitter() {
-  # If an IR emitter tool is present or installable, ensure it is configured
+  # If an IR emitter tool is present or installable, ensure it is configured.
+  # Only track management if we are enabling a service that was not already enabled.
   if omarchy-cmd-present linux-enable-ir-emitter; then
     echo "Configuring hardware IR emitter..."
     sudo linux-enable-ir-emitter configure || true
-    if systemctl list-unit-files | grep -q linux-enable-ir-emitter; then
-      sudo systemctl enable --now linux-enable-ir-emitter.service || true
+    if systemctl list-unit-files 2>/dev/null | grep -q linux-enable-ir-emitter; then
+      if ! systemctl is-enabled linux-enable-ir-emitter.service &>/dev/null; then
+        sudo mkdir -p /var/lib/omarchy
+        sudo touch /var/lib/omarchy/face-ir-emitter-enabled
+        omarchy-state set face-ir-emitter-enabled 2>/dev/null || true
+        sudo systemctl enable --now linux-enable-ir-emitter.service || true
+      fi
     fi
   fi
 }
@@ -99,37 +106,74 @@ normalize_howdy_paths() {
   fi
 }
 
+can_capture_device() {
+  local dev="$1"
+  [[ -e $dev ]] || return 1
+  timeout 5 v4l2-ctl --device="$dev" --stream-mmap --stream-count=1 --stream-to=/dev/null >/dev/null 2>&1
+}
+
 verify_camera_capture() {
-  # Detection only proves a camera exists, not that it can deliver frames —
-  # the same reason fingerprint enrollment verifies before touching PAM.
-  # Grab one frame from the device Howdy will read, falling back to any
-  # capture node when no IR device was identified.
-  local dev
-  if [[ -n $CAMERA_DEVICE ]]; then
-    v4l2-ctl --device="$CAMERA_DEVICE" --stream-mmap --stream-count=1 --stream-to=/dev/null >/dev/null 2>&1 && return 0
+  # Detection only proves a camera exists, not that it can deliver frames.
+  # Grab one frame from the device Howdy is configured to read.
+  # If that device cannot stream, search for a working device and update Howdy's
+  # configured device_path so the lock screen uses a functioning camera.
+  local config_file dev working_dev=""
+  config_file=$(resolve_howdy_config) || config_file=""
+
+  local configured_dev="$CAMERA_DEVICE"
+  if [[ -z $configured_dev && -n $config_file && -f $config_file ]]; then
+    configured_dev=$(grep -E '^[# ]*device_path\s*=' "$config_file" | head -1 | sed -E 's/^[# ]*device_path\s*=\s*//')
+    [[ $configured_dev == "none" ]] && configured_dev=""
   fi
-  for dev in /dev/video*; do
-    [[ -e $dev ]] || continue
-    v4l2-ctl --device="$dev" --stream-mmap --stream-count=1 --stream-to=/dev/null >/dev/null 2>&1 && return 0
-  done
+
+  if [[ -n $configured_dev ]] && can_capture_device "$configured_dev"; then
+    CAMERA_DEVICE="$configured_dev"
+    return 0
+  fi
+
+  if [[ -d /dev/v4l/by-path ]]; then
+    for dev in /dev/v4l/by-path/*; do
+      if can_capture_device "$dev"; then
+        working_dev="$dev"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z $working_dev ]]; then
+    for dev in /dev/video*; do
+      if can_capture_device "$dev"; then
+        working_dev="$dev"
+        break
+      fi
+    done
+  fi
+
+  if [[ -n $working_dev ]]; then
+    CAMERA_DEVICE="$working_dev"
+    if [[ -n $config_file && -f $config_file ]]; then
+      echo "Configured working camera device: $working_dev"
+      sudo sed -i -E "s|^[# ]*device_path\s*=.*|device_path = $working_dev|" "$config_file"
+    fi
+    return 0
+  fi
+
   return 1
 }
 
 verify_enrollment() {
-  # Enrollment must leave a model behind; an empty models directory means the
-  # enrollment silently failed and PAM would have nothing to match. The
-  # models home tracks whichever config location this build uses, so probe
-  # the resolved location first and then every known one.
+  # Enrollment must leave a model specifically for TARGET_USER behind;
+  # an empty models directory or other users' models cannot satisfy this user's enrollment.
   local config dir
   config=$(resolve_howdy_config) || config=""
   if [[ -n $config ]]; then
     dir="$(dirname "$config")/models"
-    if [[ -d $dir ]] && [[ -n $(ls -A "$dir" 2>/dev/null) ]]; then
+    if [[ -d $dir && -s "$dir/${TARGET_USER}.dat" ]]; then
       return 0
     fi
   fi
   for dir in /etc/howdy/models "$HOWDY_DIR/models" /usr/local/etc/howdy/models; do
-    if [[ -d $dir ]] && [[ -n $(ls -A "$dir" 2>/dev/null) ]]; then
+    if [[ -d $dir && -s "$dir/${TARGET_USER}.dat" ]]; then
       return 0
     fi
   done
@@ -150,20 +194,20 @@ account    include     system-local-login
 EOF
 }
 
-echo -e "\e[32mSetting up face recognition for lock screen authentication.\n\e[0m"
+run_setup() {
+  echo -e "\e[32mSetting up face recognition for lock screen authentication.\n\e[0m"
 
-# Bail before installing anything if there's no camera detected
-if ! omarchy-hw-face; then
-  echo -e "\e[31mNo camera or IR face sensor detected.\e[0m"
-  exit 1
-fi
-
+  # Bail before installing anything if there's no camera detected
+  if ! omarchy-hw-face; then
+    echo -e "\e[31mNo camera or IR face sensor detected.\e[0m"
+    exit 1
+  fi
 # Install Howdy from the AUR — ArchWiki notes the plain howdy package is
 # outdated; howdy-git ships the compiled /lib/security/pam_howdy.so module.
 # Building its python-dlib/OpenCV dependency chain can take several minutes.
 echo "Installing Howdy face authentication (AUR build, this can take a while)..."
-if ! omarchy-pkg-add howdy-git v4l-utils; then
-  echo -e "\e[31mHowdy installation failed. Nothing was changed on your system.\e[0m"
+if ! omarchy-pkg-add v4l-utils || ! omarchy-pkg-aur-add howdy-git; then
+  echo -e "\e[31mHowdy installation failed. Run 'omarchy remove security face' to clean up partial installation.\e[0m"
   exit 1
 fi
 
@@ -174,26 +218,28 @@ configure_howdy_settings
 echo "Verifying the camera can capture frames..."
 if ! verify_camera_capture; then
   echo -e "\e[31mCamera check failed: no device produced video frames.\e[0m"
-  echo -e "\e[31mHowdy needs a working camera. Nothing was changed on your system.\e[0m"
+  echo -e "\e[31mHowdy packages were installed but face authentication was not enabled.\e[0m"
+  echo -e "\e[31mRun 'omarchy remove security face' to clean up partial installation.\e[0m"
   exit 1
 fi
 
-# Enroll the baseline model, unless this build already has one (the setup is
-# idempotent — e.g. re-running to repair the PAM configuration).
+# Enroll the baseline model, unless this build already has one for TARGET_USER
 if verify_enrollment; then
-  echo -e "\e[32mExisting face model found; skipping enrollment.\e[0m"
+  echo -e "\e[32mExisting face model found for $TARGET_USER; skipping enrollment.\e[0m"
 else
   echo -e "\e[32m\nStep 1: Baseline Face Model\e[0m"
   echo -e "Look straight at the camera with normal lighting.\n"
 
-  if sudo howdy add; then
+  if sudo howdy -U "$TARGET_USER" add; then
     if ! verify_enrollment; then
-      echo -e "\e[31mEnrollment completed but no face model was stored. Please try again.\e[0m"
+      echo -e "\e[31mEnrollment completed but no face model was stored for $TARGET_USER. Please try again.\e[0m"
+      echo -e "\e[31mRun 'omarchy remove security face' to clean up.\e[0m"
       exit 1
     fi
     echo -e "\e[32m\nBaseline model enrolled successfully!\e[0m"
   else
     echo -e "\e[31m\nFace enrollment failed. Please try again.\e[0m"
+    echo -e "\e[31mRun 'omarchy remove security face' to clean up partial installation.\e[0m"
     exit 1
   fi
 fi
@@ -209,9 +255,14 @@ echo ""
 if [[ $REPLY =~ ^[Yy]$ ]]; then
   echo -e "\e[32m\nStep 2: Secondary Face Model\e[0m"
   echo -e "Look at the camera from a slight angle, with glasses, or in dimmer light.\n"
-  sudo howdy add || true
+  sudo howdy -U "$TARGET_USER" add || true
   normalize_howdy_paths
 fi
 
 echo -e "\e[32m\nPerfect! Face authentication is now completely configured.\e[0m"
 echo "You can unlock your lock screen (Super + L) instantly by looking at the camera."
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  run_setup "$@"
+fi
