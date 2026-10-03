@@ -234,6 +234,20 @@ if ! grep -q 'config: "omarchy-lock-howdy"' "$SERVICE"; then
 fi
 pass "lock service declares the omarchy-lock-howdy PAM context"
 
+node -e '
+const fs = require("fs");
+for (const file of [process.argv[1], process.argv[2]]) {
+  const content = fs.readFileSync(file, "utf8");
+  let balance = 0;
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === "{") balance++;
+    else if (content[i] === "}") balance--;
+    if (balance < 0) process.exit(1);
+  }
+  if (balance !== 0) process.exit(1);
+}
+' "$SERVICE" "$VIEW" || fail "lock service and view QML files have balanced braces"
+pass "lock service and view QML files have balanced braces"
 # The view keeps exactly one hover area (the existing one, extended with
 # motion wake) so an added overlay cannot steal hover or cursor styling.
 mouse_areas=$(grep -c "MouseArea {" "$VIEW")

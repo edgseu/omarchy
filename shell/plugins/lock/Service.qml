@@ -653,8 +653,8 @@ Item {
       if (root.lockRequested && root.facePamConfigured) {
         root.startFace()
       }
+    }
   }
-
   onAuthenticatingPasswordChanged: {
     if (!lockRequested) return
     if (authenticatingPassword) idleBlankTimer.stop()
