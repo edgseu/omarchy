@@ -109,6 +109,10 @@ assertEqual(menu.fuzzyTextScore('xyz', 'abc'), -1, 'non-matching fuzzy search te
 assert(menu.fuzzyTextScore('stm', 'System') >= 0, 'fuzzy text score matches in-order characters')
 assert(menu.fuzzyTextScore('stm', 'Steam') >= 0, 'fuzzy text score matches word-start and consecutive characters')
 assert(menu.fuzzyTextScore('sys', 'System') < menu.fuzzyTextScore('stm', 'System'), 'contiguous prefix matches rank higher than scattered characters')
+assert(
+  menu.fuzzyTextScore('st', 'sxxxxxt s-t') < 21,
+  'fuzzy text score prefers later word-start alignment over greedy first occurrence'
+)
 assert(menu.fuzzyQueryScore('thm pick', 'Theme picker') >= 0, 'fuzzy query score matches multiple terms')
 assertEqual(menu.fuzzyQueryScore('thm zzz', 'Theme picker'), -1, 'fuzzy query score rejects queries with missing terms')
 assert(menu.matchesQuery(entry, 'thm', true), 'menu matches fuzzy queries')
@@ -125,6 +129,19 @@ assert(menu.matchesQuery(mixedEntry, 'thm colors', true), 'menu matches multi-te
 assert(menu.searchScore(mixedItems, mixedEntry, 'thm pick') < menu.searchScore(mixedItems, mixedEntry, 'thm colors'), 'pure name fuzzy matches score ahead of mixed name-and-description matches')
 assert(menu.searchScore(mixedItems, mixedEntry, 'thm colors') < menu.searchScore(mixedItems, mixedEntry, 'appr'), 'mixed name-and-description matches score ahead of pure description fuzzy matches')
 assert(menu.searchScore(mixedItems, mixedEntry, 'appr') < menu.searchScore(mixedItems, mixedEntry, 'zzz'), 'pure description fuzzy matches score ahead of unmatched fallback')
+const worseMixedEntry = { id: 'test.worse_mixed', label: 'Theme picker', description: 'Appearance and extra miscellaneous words with colors', kind: 'action', order: 0 }
+const comparisonMixedItems = { 'test.mixed': mixedEntry, 'test.worse_mixed': worseMixedEntry }
+assert(
+  menu.searchScore(comparisonMixedItems, mixedEntry, 'thm colors') < menu.searchScore(comparisonMixedItems, worseMixedEntry, 'thm colors'),
+  'mixed name-and-description fuzzy matches retain ranking distinctions without flattening to equal scores'
+)
+const betterNameEntry = { id: 'test.better_name', label: 'alpha bravo charlie', order: 0 }
+const worseNameEntry = { id: 'test.worse_name', label: 'alpha xxxxx bravo xxxxx charlie', order: 0 }
+const comparisonNameItems = { 'test.better_name': betterNameEntry, 'test.worse_name': worseNameEntry }
+assert(
+  menu.searchScore(comparisonNameItems, betterNameEntry, 'alpha bravo charlie') < menu.searchScore(comparisonNameItems, worseNameEntry, 'alpha bravo charlie'),
+  'multi-term name fuzzy matches retain ranking distinctions without flattening to equal scores'
+)
 
 assertDeepEqual(
   menu.displayRow(merged.items, merged.itemOrder, {}, {}, entry, 'Style', 12, 'search'),

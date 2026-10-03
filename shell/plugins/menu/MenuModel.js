@@ -327,25 +327,56 @@ function fuzzyTextScore(term, text) {
   var needle = String(term || "").toLowerCase()
   var haystack = String(text || "").toLowerCase()
   if (!needle) return 0
+  var nLen = needle.length
+  var hLen = haystack.length
+  if (nLen > hLen) return -1
 
-  var position = -1
-  var previous = -1
-  var score = 0
-  for (var i = 0; i < needle.length; i++) {
-    position = haystack.indexOf(needle.charAt(i), position + 1)
-    if (position < 0) return -1
-
-    // Earlier matches, word starts (whitespace and . _ : / \ - delimiters),
-    // and consecutive characters rank first.
-    score += position === 0 || /[\s._:/\\-]/.test(haystack.charAt(position - 1)) ? -4 : 0
-    if (previous >= 0) score += Math.max(0, position - previous - 1) * 2
-    previous = position
+  function isWordStart(pos) {
+    return pos === 0 || /[\s._:/\\-]/.test(haystack.charAt(pos - 1))
   }
 
+  // dp[j] tracks the minimum accumulated score matching needle[0..i]
+  // with needle[i] aligned at haystack[j].
+  var dp = new Array(hLen)
+  var ch0 = needle.charAt(0)
+  for (var j = 0; j < hLen; j++) {
+    dp[j] = haystack.charAt(j) === ch0 ? (isWordStart(j) ? -4 : 0) : Infinity
+  }
+
+  for (var i = 1; i < nLen; i++) {
+    var ch = needle.charAt(i)
+    var nextDp = new Array(hLen)
+    var runningMin = Infinity
+
+    for (var k = 0; k < hLen; k++) {
+      if (k > 0 && dp[k - 1] !== Infinity) {
+        var prevVal = dp[k - 1] - 2 * (k - 1)
+        if (prevVal < runningMin) runningMin = prevVal
+      }
+
+      if (haystack.charAt(k) === ch && runningMin !== Infinity) {
+        var bonus = isWordStart(k) ? -4 : 0
+        nextDp[k] = bonus + 2 * k - 2 + runningMin
+      } else {
+        nextDp[k] = Infinity
+      }
+    }
+    dp = nextDp
+  }
+
+  var minScore = Infinity
+  for (var m = 0; m < hLen; m++) {
+    if (dp[m] !== Infinity) {
+      var candidate = 10 + dp[m] + Math.max(0, m - nLen + 1)
+      if (candidate < minScore) minScore = candidate
+    }
+  }
+
+  if (minScore === Infinity) return -1
   // Keep -1 reserved for no match, and floor successful matches at 1:
   // word-start bonuses can otherwise drive a verbatim substring ("a.b.c"
   // matching itself) negative, hiding rows the exact search used to find.
-  return Math.max(1, 10 + score + Math.max(0, position - needle.length + 1))
+  return Math.max(1, minScore)
 }
 
 function queryTerms(query) {
@@ -399,14 +430,18 @@ function searchScore(items, entry, query) {
   else if (nameText.indexOf(needle) >= 0) score = 40
   else if (descriptionTextMatches(needle, descriptionText)) score = 60
   else {
-    // Fuzzy tiers rank behind every exact tier (0-60). Name matches cap
-    // below the description tier so a scattered multi-term name match cannot
-    // invert name-over-description ordering. Mixed name-and-description matches
-    // rank after pure name matches and before description-only matches.
+    // Fuzzy tiers rank behind every exact tier (0-60). Monotonic fractional
+    // compression keeps scores bounded within each tier so pure name matches
+    // consistently outrank mixed matches, mixed matches outrank description-only
+    // matches, and description matches outrank unmatched fallback, without
+    // flattening distinct fuzzy results at a hard cap.
     var nameFuzzyScore = fuzzyQueryScore(needle, nameText)
     var descriptionFuzzyScore = fuzzyQueryScore(needle, descriptionText)
+    var fuzzyOffset = function(raw) {
+      return raw / (1 + raw / 14)
+    }
     if (nameFuzzyScore >= 0) {
-      score = Math.min(99, 70 + nameFuzzyScore)
+      score = 70 + fuzzyOffset(nameFuzzyScore)
     } else {
       var terms = queryTerms(needle)
       var mixedScore = 0
@@ -421,8 +456,8 @@ function searchScore(items, entry, query) {
         else if (sDesc >= 0) { mixedScore += sDesc + 10; hasDesc = true }
         else { mixedMatches = false; break }
       }
-      if (mixedMatches && hasName && hasDesc) score = Math.min(99, 85 + mixedScore)
-      else if (descriptionFuzzyScore >= 0) score = 100 + descriptionFuzzyScore
+      if (mixedMatches && hasName && hasDesc) score = 85 + fuzzyOffset(mixedScore)
+      else if (descriptionFuzzyScore >= 0) score = 100 + fuzzyOffset(descriptionFuzzyScore)
     }
   }
   if (entry.kind === "menu" || entry.kind === "link") score -= 2
