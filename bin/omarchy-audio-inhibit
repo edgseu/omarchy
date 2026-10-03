@@ -134,6 +134,7 @@ claim_stay_awake() {
   rm -f "$OWNER_FILE"
   # A user-owned or third-party stay-awake (not matching our prefix) wins.
   if [[ -e $IDLE_STATE_FILE ]] && ! owns_idle_state; then
+    hand_off user
     return 0
   fi
 
@@ -149,6 +150,7 @@ claim_stay_awake() {
 }
 
 release_stay_awake() {
+  detect_user_intent
   if owns_idle_state; then
     rm -f "$IDLE_STATE_FILE"
   fi
@@ -174,6 +176,15 @@ reconcile_audio_state() {
       release_stay_awake
       ;;
     *)
+      # Locking hands off immediately, even if the audio query failed
+      if session_is_locked; then
+        detect_user_intent
+        if owns_idle_state; then
+          rm -f "$IDLE_STATE_FILE"
+        fi
+        hand_off lock
+        return 0
+      fi
       # Hold the current state on transient failures; if the audio system
       # stays unqueryable, nothing audible is playing, so release.
       (( FAIL_COUNT += 1 ))
@@ -207,10 +218,11 @@ case "${1:-}" in
               fi
               ;;
           esac
+        elif [[ -e $IDLE_STATE_FILE ]] && ! owns_idle_state; then
+          echo "playing (stay-awake held by user)"
         else
           echo "playing"
         fi
-        ;;
     esac
     exit 0
     ;;
@@ -231,6 +243,9 @@ while true; do
   while :; do
     IFS= read -r -t 60 event
     read_status=$?
+    if (( read_status > 128 )); then
+      continue
+    fi
     if (( read_status != 0 )); then
       break
     fi
@@ -239,7 +254,7 @@ while true; do
     # session, and PipeWire may report them on the client instead of the
     # stream. Reconcile is idempotent and audio events are sparse.
     reconcile_audio_state
-  done
+  done < <(exec pactl subscribe 2>/dev/null)
 
   # The subscription ended: the audio system is gone or restarting. Reconcile
   # once, then retry with escalating backoff; a healthy query resets it.

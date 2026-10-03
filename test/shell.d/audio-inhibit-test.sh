@@ -293,3 +293,107 @@ HOME="$BOOT_HOME" XDG_RUNTIME_DIR="$BOOT_RUNTIME" \
 [[ ! -f "$BOOT_HOME/.local/state/omarchy/indicators/stay-awake" ]] ||
   fail "audio inhibitor cleans up stranded tokens from previous boots on startup"
 pass "audio inhibitor cleans up stranded tokens from previous boots on startup"
+
+# 16. Lock during an unqueryable audio state still releases stay-awake immediately
+write_pactl_stub "$PLAYING"
+write_lock_stub 1
+run_inhibit
+[[ -f $STAY ]] || fail "setup: stay-awake claimed before lock"
+
+cat >"$BIN_DIR/pactl" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+write_lock_stub 0
+run_inhibit
+
+[[ ! -f $STAY ]] ||
+  fail "locking releases stay-awake even when audio query fails"
+pass "locking releases stay-awake even when audio query fails"
+
+[[ $(<"$HANDSOFF") == lock ]] ||
+  fail "locking records a lock hands-off even when audio query fails"
+pass "locking records a lock hands-off even when audio query fails"
+
+# 17. Playback stop immediately after user re-enables stay-awake preserves user setting
+write_pactl_stub '[]'
+write_lock_stub 1
+run_inhibit
+
+write_pactl_stub "$PLAYING"
+write_lock_stub 1
+run_inhibit
+[[ -f $STAY ]] || fail "setup: stay-awake claimed before user touch"
+
+sleep 1.1
+touch "$STAY"
+write_pactl_stub '[]'
+run_inhibit
+
+[[ -f $STAY ]] ||
+  fail "user re-enabled stay-awake survives when playback stops immediately"
+[[ $(<"$STAY") == user ]] ||
+  fail "stay-awake rewritten to user ownership when playback stops immediately"
+pass "user re-enabled stay-awake survives when playback stops immediately"
+
+# 18. Status reports user ownership when stay-awake was set before playback
+rm -f "$STAY" "$HANDSOFF" "$OWNER"
+printf 'manual-user\n' >"$STAY"
+write_pactl_stub "$PLAYING"
+run_inhibit
+
+[[ $(status_inhibit) == "playing (stay-awake held by user)" ]] ||
+  fail "status indicates stay-awake held by user when set before playback"
+pass "status indicates stay-awake held by user when set before playback"
+
+# 19. Audio event subscription wakes the daemon and reconciles immediately
+FIFO="$TEST_RUNTIME/pactl-events"
+mkfifo "$FIFO"
+cat >"$BIN_DIR/pactl" <<EOF
+#!/bin/bash
+if [[ \$1 == "subscribe" ]]; then
+  exec cat "$FIFO"
+fi
+if [[ \$1 == "--format=json" && \$2 == "list" && \$3 == "sink-inputs" ]]; then
+  if [[ -f "$TEST_RUNTIME/simulated-playback" ]]; then
+    printf '%s\n' '$PLAYING'
+  else
+    printf '[]\n'
+  fi
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$BIN_DIR/pactl"
+
+rm -f "$STAY" "$HANDSOFF" "$OWNER" "$TEST_RUNTIME/simulated-playback"
+HOME="$TEST_HOME" XDG_RUNTIME_DIR="$TEST_RUNTIME" \
+  "$ROOT/bin/omarchy-audio-inhibit" & daemon_pid=$!
+
+# Daemon starts idle (no playback)
+sleep 0.2
+[[ ! -f $STAY ]] || fail "setup: daemon starts idle"
+
+# Simulate playback starting and emit an event through the subscription pipe
+touch "$TEST_RUNTIME/simulated-playback"
+echo "Event 'new' on sink-input #1" >"$FIFO" &
+fifo_pid=$!
+
+tries=30
+claimed=0
+while (( tries > 0 )); do
+  if [[ -f $STAY ]]; then
+    claimed=1
+    break
+  fi
+  sleep 0.05
+  tries=$(( tries - 1 ))
+done
+
+kill "$daemon_pid" "$fifo_pid" 2>/dev/null || true
+wait "$daemon_pid" 2>/dev/null || true
+wait "$fifo_pid" 2>/dev/null || true
+
+(( claimed == 1 )) ||
+  fail "daemon claims stay-awake immediately on audio subscription event"
+pass "daemon claims stay-awake immediately on audio subscription event"
