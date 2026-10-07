@@ -526,10 +526,14 @@ touch "$test_tmp/dev/video_ir_mjpg"
 echo "Integrated IR Camera" > "$test_tmp/sys/class/video4linux/video_ir_mjpg/device/interface"
 echo "Integrated RGB Camera: Integrat" > "$test_tmp/sys/class/video4linux/video_ir_mjpg/name"
 
-# Mock v4l2-ctl output: IR camera advertises MJPG compression alongside an IR format
+# Mock v4l2-ctl output: IR camera advertises MJPG compression alongside an IR format, and active format is GREY
 v4l2-ctl() {
-  echo "[0]: '\''MJPG'\'' (Motion-JPEG)"
-  echo "[1]: '\''GREY'\'' (8-bit Greyscale)"
+  if [[ "$*" == *"--get-fmt-video"* ]]; then
+    echo "Pixel Format : '\''GREY'\'' (8-bit Greyscale)"
+  else
+    echo "[0]: '\''MJPG'\'' (Motion-JPEG)"
+    echo "[1]: '\''GREY'\'' (8-bit Greyscale)"
+  fi
 }
 
 export V4L_SYSFS="$test_tmp/sys/class/video4linux"
@@ -539,6 +543,37 @@ if ! is_ir_device "$test_tmp/dev/video_ir_mjpg"; then
 fi
 ' || fail "is_ir_device must accept an explicitly-identified IR camera even if it supports MJPG compression"
 pass "is_ir_device accepts explicitly-identified IR cameras that support MJPG compression"
+
+# 2g. Verify is_ir_device rejects an IR-labeled camera if its active stream format is visible color
+bash -c '
+set -euo pipefail
+test_tmp="'"$test_tmp"'"
+source "'"$setup_copy"'"
+
+mkdir -p "$test_tmp/dev"
+mkdir -p "$test_tmp/sys/class/video4linux/video_ir_visible/device"
+touch "$test_tmp/dev/video_ir_visible"
+
+echo "Integrated IR Camera" > "$test_tmp/sys/class/video4linux/video_ir_visible/device/interface"
+echo "Integrated IR Camera" > "$test_tmp/sys/class/video4linux/video_ir_visible/name"
+
+# Mock v4l2-ctl: supports both GREY and MJPG, BUT active format is MJPG (visible color)
+v4l2-ctl() {
+  if [[ "$*" == *"--get-fmt-video"* ]]; then
+    echo "Pixel Format : '\''MJPG'\'' (Motion-JPEG)"
+  else
+    echo "[0]: '\''MJPG'\'' (Motion-JPEG)"
+    echo "[1]: '\''GREY'\'' (8-bit Greyscale)"
+  fi
+}
+
+export V4L_SYSFS="$test_tmp/sys/class/video4linux"
+if is_ir_device "$test_tmp/dev/video_ir_visible"; then
+  echo "is_ir_device should have rejected an IR camera whose active capture format is visible light (MJPG)" >&2
+  exit 1
+fi
+' || fail "is_ir_device must reject camera nodes whose active stream format is visible light"
+pass "is_ir_device rejects camera nodes whose active stream format is visible light"
 # 3. Verify setup enrollment checks target user specifically (does not skip on unrelated models)
 bash -c '
 set -euo pipefail

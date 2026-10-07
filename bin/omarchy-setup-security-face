@@ -89,14 +89,13 @@ is_ir_device() {
     real_sys="${V4L_SYSFS:-/sys/class/video4linux}/${real_node##*/}"
   fi
 
-  # 1. Affirmative IR identity: explicit IR naming in USB interface descriptor or V4L2 device name.
-  # This takes precedence over compression formats (e.g. IR cameras using MJPG for bus bandwidth).
+  local has_ir_identity=false
   if [[ -d $real_sys ]]; then
     if [[ -r $real_sys/device/interface ]]; then
       local interface
       interface=$(<"$real_sys/device/interface")
       if [[ ${interface,,} =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]]; then
-        return 0
+        has_ir_identity=true
       fi
     fi
     if [[ -r $real_sys/name ]]; then
@@ -104,14 +103,30 @@ is_ir_device() {
       name=$(<"$real_sys/name")
       local name_lower=${name,,}
       if [[ $name_lower =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]] || [[ $name_lower == *hm1092* || $name_lower == *ov01a1s* ]]; then
-        return 0
+        has_ir_identity=true
       fi
     fi
   fi
 
-  local formats=""
+  local formats="" active_fmt=""
   if command -v v4l2-ctl &>/dev/null; then
     formats=$(v4l2-ctl --device="$dev" --list-formats 2>/dev/null || true)
+    active_fmt=$(v4l2-ctl --device="$dev" --get-fmt-video 2>/dev/null | grep -i 'Pixel Format' || true)
+  fi
+
+  # Active capture stream check: if the driver defaults to visible color (MJPG/YUYV/RGB),
+  # OpenCV will ingest visible frames, defeating IR-only protection. The active capture
+  # format must be a verified infrared or depth format.
+  if [[ -n $active_fmt ]] && ! echo "$active_fmt" | grep -qE "'(GREY|Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
+    return 1
+  fi
+
+  # 1. Affirmative IR identity: accepted when node supports an IR format or when formats are unprobed.
+  if [[ $has_ir_identity == true ]]; then
+    if [[ -z $formats ]] || echo "$formats" | grep -qE "'(GREY|Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
+      return 0
+    fi
+    return 1
   fi
 
   # 2. Dedicated raw depth and infrared sensor formats that visible webcams do not expose.
@@ -133,7 +148,6 @@ is_ir_device() {
 
   return 1
 }
-
 find_ir_device() {
   local dev
   # /dev/v4l/by-path is the stable naming (ArchWiki), and the same path the
@@ -176,6 +190,13 @@ normalize_howdy_paths() {
 can_capture_device() {
   local dev="$1"
   [[ -e $dev ]] || return 1
+  if command -v v4l2-ctl &>/dev/null; then
+    local active_fmt
+    active_fmt=$(v4l2-ctl --device="$dev" --get-fmt-video 2>/dev/null | grep -i 'Pixel Format' || true)
+    if [[ -n $active_fmt ]] && ! echo "$active_fmt" | grep -qE "'(GREY|Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
+      return 1
+    fi
+  fi
   timeout 5 v4l2-ctl --device="$dev" --stream-mmap --stream-count=1 --stream-to=/dev/null >/dev/null 2>&1
 }
 
