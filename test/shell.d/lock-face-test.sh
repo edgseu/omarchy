@@ -13,6 +13,7 @@ REMOVE="$ROOT/bin/omarchy-remove-security-face"
 SERVICE="$ROOT/shell/plugins/lock/Service.qml"
 VIEW="$ROOT/shell/plugins/lock/LockView.qml"
 MANIFEST="$ROOT/shell/plugins/lock/manifest.json"
+MENU="$ROOT/default/omarchy/omarchy-menu.jsonc"
 
 # The wizard must install the maintained Howdy build from AUR via omarchy-pkg-aur-add.
 if ! grep -q "omarchy-pkg-aur-add howdy-git" "$SETUP"; then
@@ -283,6 +284,20 @@ if ! grep -q "faceIndicator" "$VIEW"; then
   fail "lock view contains the face indicator"
 fi
 pass "lock view contains the face indicator"
+if ! sed -n '/id: faceIcon/,/^[[:space:]]*}/p' "$VIEW" | grep -q "root.faceAuthenticating ? \"󰱻\""; then
+  fail "lock view displays 󰱻 glyph when face scan is active"
+fi
+pass "lock view displays 󰱻 glyph when face scan is active"
+
+if ! grep -q '"setup.security.face"' "$MENU" || ! grep -q '"omarchy-hw-face"' "$MENU"; then
+  fail "menu declares setup.security.face gated by omarchy-hw-face"
+fi
+pass "menu declares setup.security.face gated by omarchy-hw-face"
+
+if ! grep -q '"remove.security.face"' "$MENU" || ! grep -q '"omarchy-pkg-present howdy-git"' "$MENU"; then
+  fail "menu declares remove.security.face gated by howdy-git presence"
+fi
+pass "menu declares remove.security.face gated by howdy-git presence"
 
 if ! grep -q "separate password, fingerprint, and face PAM flows" "$MANIFEST"; then
   fail "lock manifest documents the face PAM flow"

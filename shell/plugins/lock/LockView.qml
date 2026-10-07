@@ -258,8 +258,9 @@ Item {
         Text {
           id: faceIcon
           objectName: "faceIndicator"
+          textFormat: Text.PlainText
           visible: root.facePamConfigured
-          text: "󰄀"
+          text: root.faceAuthenticating ? "󰱻" : "󰄀"
           color: root.faceAuthenticating ? (Color.accent || Color.lock.text) : Color.lock.placeholder
           opacity: root.faceAuthenticating ? root.facePulseOpacity : 0.6
           font.family: Style.font.family
