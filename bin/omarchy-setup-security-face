@@ -80,14 +80,16 @@ is_ir_device() {
   local dev="$1"
   [[ -e $dev ]] || return 1
 
-  # 1. Pixel format test: check if device exposes infrared/greyscale/depth formats.
+  local formats=""
   if command -v v4l2-ctl &>/dev/null; then
-    if v4l2-ctl --device="$dev" --list-formats 2>/dev/null | grep -qE "'(GREY|Y10P|Y10 |Y12 |Y16 |Z16 |INVZ)'"; then
-      return 0
+    formats=$(v4l2-ctl --device="$dev" --list-formats 2>/dev/null || true)
+    # 1. Reject devices that advertise consumer RGB/color video formats
+    if echo "$formats" | grep -qE "'(MJPG|RGB3|BGR3|NV12|RGB4|BGR4)'"; then
+      return 1
     fi
   fi
 
-  # 2. Sysfs descriptor test: inspect interface and card name with word boundaries
+  # Resolve sysfs directory for this node
   local real_node real_sys
   if [[ -d $dev && -r $dev/name ]]; then
     real_sys="$dev"
@@ -95,6 +97,8 @@ is_ir_device() {
     real_node=$(readlink -f "$dev" 2>/dev/null || echo "$dev")
     real_sys="${V4L_SYSFS:-/sys/class/video4linux}/${real_node##*/}"
   fi
+
+  # 2. Check explicit IR naming in USB interface descriptor or V4L2 device name
   if [[ -d $real_sys ]]; then
     if [[ -r $real_sys/device/interface ]]; then
       local interface
@@ -108,6 +112,21 @@ is_ir_device() {
       name=$(<"$real_sys/name")
       local name_lower=${name,,}
       if [[ $name_lower =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]] || [[ $name_lower == *hm1092* || $name_lower == *ov01a1s* ]]; then
+        return 0
+      fi
+    fi
+  fi
+
+  # 3. Check infrared-specific raw sensor formats or GREY with IR corroboration
+  if [[ -n $formats ]]; then
+    # Dedicated depth and infrared raw sensor formats
+    if echo "$formats" | grep -qE "'(Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
+      return 0
+    fi
+
+    # Standard GREY format requires hardware IR corroboration (e.g. UVC Extension units)
+    if echo "$formats" | grep -qE "'GREY'"; then
+      if v4l2-ctl --device="$dev" --all 2>/dev/null | grep -qiE 'Extension|infrared|(\b|_)ir(\b|_)'; then
         return 0
       fi
     fi
@@ -231,16 +250,25 @@ EOF
 run_setup() {
   echo -e "\e[32mSetting up face recognition for lock screen authentication.\n\e[0m"
 
-  # Bail before installing anything if there's no camera detected
-  if ! omarchy-hw-face; then
-    echo -e "\e[31mNo camera or IR face sensor detected.\e[0m"
+  # Install v4l-utils first so pixel format and hardware validation can inspect camera nodes
+  echo "Checking hardware dependencies..."
+  if ! omarchy-pkg-add v4l-utils; then
+    echo -e "\e[31mFailed to install v4l-utils.\e[0m"
     exit 1
   fi
+
+  # Bail before installing Howdy if there is no Windows Hello compatible IR sensor
+  if ! omarchy-hw-face; then
+    echo -e "\e[31mNo Windows Hello compatible IR face sensor detected.\e[0m"
+    echo -e "\e[31mHowdy face authentication requires an infrared (IR) sensor to prevent photo spoofing.\e[0m"
+    exit 1
+  fi
+
   # Install Howdy from the AUR — ArchWiki notes the plain howdy package is
   # outdated; howdy-git ships the compiled /lib/security/pam_howdy.so module.
   # Building its python-dlib/OpenCV dependency chain can take several minutes.
   echo "Installing Howdy face authentication (AUR build, this can take a while)..."
-  if ! omarchy-pkg-add v4l-utils || ! omarchy-pkg-aur-add howdy-git; then
+  if ! omarchy-pkg-aur-add howdy-git; then
     echo -e "\e[31mHowdy installation failed. Run 'omarchy remove security face' to clean up partial installation.\e[0m"
     exit 1
   fi

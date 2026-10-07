@@ -24,6 +24,14 @@ if ! grep -q "omarchy-pkg-add v4l-utils" "$SETUP"; then
   fail "setup installs v4l-utils via pacman"
 fi
 pass "setup installs v4l-utils via pacman"
+# Setup must install v4l-utils before running omarchy-hw-face so that pixel formats
+# can be probed on clean installations without v4l-utils preinstalled.
+v4l_line=$(grep -n "omarchy-pkg-add v4l-utils" "$SETUP" | head -1 | cut -d: -f1)
+hw_line=$(grep -n "omarchy-hw-face" "$SETUP" | head -1 | cut -d: -f1)
+if (( v4l_line >= hw_line )); then
+  fail "setup installs v4l-utils before running omarchy-hw-face"
+fi
+pass "setup installs v4l-utils before running omarchy-hw-face"
 if grep -qE "omarchy-pkg-add howdy( |$)" "$SETUP"; then
   fail "setup must not install the outdated plain howdy package"
 fi
@@ -481,6 +489,28 @@ is_ir_device "$test_tmp/sys/class/video4linux/video_ir" || exit 1
 ! is_ir_device "$test_tmp/sys/class/video4linux/video_mira" || exit 1
 ' || fail "is_ir_device fails to distinguish IR from RGB and substring devices"
 pass "is_ir_device accurately identifies Windows Hello IR sensors and rejects RGB/substring devices"
+
+# 2e. Verify is_ir_device rejects webcams advertising RGB formats alongside GREY
+bash -c '
+set -euo pipefail
+test_tmp="'"$test_tmp"'"
+source "'"$setup_copy"'"
+
+mkdir -p "$test_tmp/dev"
+touch "$test_tmp/dev/video_hybrid"
+
+# Mock v4l2-ctl output: hybrid device advertises both GREY and MJPG
+v4l2-ctl() {
+  echo "[0]: '\''MJPG'\'' (Motion-JPEG)"
+  echo "[1]: '\''GREY'\'' (8-bit Greyscale)"
+}
+
+if is_ir_device "$test_tmp/dev/video_hybrid"; then
+  echo "is_ir_device should have rejected a camera advertising MJPG format alongside GREY" >&2
+  exit 1
+fi
+' || fail "is_ir_device must reject cameras advertising consumer RGB formats alongside GREY"
+pass "is_ir_device rejects cameras advertising consumer RGB formats alongside GREY"
 # 3. Verify setup enrollment checks target user specifically (does not skip on unrelated models)
 bash -c '
 set -euo pipefail
