@@ -119,12 +119,11 @@ if ! grep -q "omarchy-lock-howdy" "$REMOVE"; then
 fi
 pass "remove tears down the face PAM context"
 
-# The hardware detector is sysfs-precise (uvcvideo binding, or camera/IR-ish
-# embedded names) and must not match every /dev/video node.
-if ! grep -q "uvcvideo" "$ROOT/bin/omarchy-hw-face"; then
-  fail "hardware detector matches USB webcams by their driver binding"
+# The hardware detector must target Windows Hello IR sensors and reject plain RGB webcams.
+if ! grep -qE "GREY|infrared|realsense|\b(ir|IR)\b" "$ROOT/bin/omarchy-hw-face"; then
+  fail "hardware detector requires Windows Hello IR sensor keywords or pixel formats"
 fi
-pass "hardware detector matches USB webcams by their driver binding"
+pass "hardware detector requires Windows Hello IR sensor keywords or pixel formats"
 
 if grep -q "ls /dev/video" "$ROOT/bin/omarchy-hw-face"; then
   fail "hardware detector must not match every /dev/video node"
@@ -373,26 +372,115 @@ sed -E -e "s:(^|[[:space:]])/etc/howdy/config.ini:\1$test_tmp/etc/howdy/config.i
        -e "s|sudo ||g" \
        "$SETUP" >"$setup_copy"
 
-# Source the helper functions from setup_copy in an isolated subshell
+# 2a. Verify setup camera validation updates Howdy's configured device_path to a fallback IR device
 bash -c '
 set -euo pipefail
 test_tmp="'"$test_tmp"'"
 source "'"$setup_copy"'"
 
 mkdir -p "$test_tmp/dev"
-touch "$test_tmp/dev/video0" "$test_tmp/dev/video1"
+touch "$test_tmp/dev/video0" "$test_tmp/dev/video_ir"
 
-# Mock can_capture_device to simulate configured device /dev/video_dead_ir failing and /dev/video1 working
 can_capture_device() {
   local dev="$1"
-  [[ $dev == *"/dev/video1" ]]
+  [[ $dev == *"/dev/video_ir" ]]
+}
+
+is_ir_device() {
+  local dev="$1"
+  [[ $dev == *"/dev/video_ir" ]]
 }
 
 verify_camera_capture >/dev/null
-grep -q "device_path = $test_tmp/dev/video1" "$test_tmp/etc/howdy/config.ini" || exit 1
-' || fail "setup camera validation fails to update Howdy configured device_path to fallback device"
-pass "setup camera validation updates Howdy configured device_path on fallback"
+grep -q "device_path = $test_tmp/dev/video_ir" "$test_tmp/etc/howdy/config.ini" || exit 1
+' || fail "setup camera validation fails to update Howdy configured device_path to fallback IR device"
+pass "setup camera validation updates Howdy configured device_path to fallback IR device"
 
+# 2b. Verify setup camera validation strictly rejects RGB-only devices on fallback
+bash -c '
+set -euo pipefail
+test_tmp="'"$test_tmp"'"
+source "'"$setup_copy"'"
+
+mkdir -p "$test_tmp/dev"
+touch "$test_tmp/dev/video_rgb"
+
+can_capture_device() {
+  local dev="$1"
+  [[ $dev == *"/dev/video_rgb" ]]
+}
+
+is_ir_device() {
+  return 1
+}
+
+if verify_camera_capture 2>/dev/null; then
+  echo "verify_camera_capture should have failed when only RGB devices exist" >&2
+  exit 1
+fi
+' || fail "setup camera validation must not fall back to RGB webcams"
+pass "setup camera validation strictly refuses RGB-only fallback devices"
+
+# 2c. Verify omarchy-hw-face behavioral detection
+bash -c '
+set -euo pipefail
+hw_tmp="'"$test_tmp"'/hw"
+mkdir -p "$hw_tmp/video0/device" "$hw_tmp/video1/device" "$hw_tmp/video2/device"
+
+# RGB camera node
+echo "Integrated RGB Camera" > "$hw_tmp/video0/name"
+echo "Integrated Camera" > "$hw_tmp/video0/device/interface"
+touch "$hw_tmp/video0/device/driver"
+
+# Substring false-positive node (MiraBox / Wireless)
+echo "MiraBox Video Capture" > "$hw_tmp/video1/name"
+echo "Wireless Webcam" > "$hw_tmp/video1/device/interface"
+touch "$hw_tmp/video1/device/driver"
+
+hw_script="'"$test_tmp"'/hw-face.sh"
+sed -e "s|video_dir=\"/sys/class/video4linux\"|video_dir=\"$hw_tmp\"|g" \
+    -e "s|dev_dir=\"/dev\"|dev_dir=\"$hw_tmp/dev\"|g" \
+    "'"$ROOT/bin/omarchy-hw-face"'" > "$hw_script"
+# Case 1: Only RGB and false-positive substring devices exist -> must fail (exit 1)
+if bash "$hw_script"; then
+  echo "omarchy-hw-face should have exited 1 on RGB and substring devices" >&2
+  exit 1
+fi
+
+# Case 2: Windows Hello IR device present by interface descriptor -> must pass (exit 0)
+echo "Integrated IR Camera" > "$hw_tmp/video2/device/interface"
+echo "Integrated RGB Camera: Integrat" > "$hw_tmp/video2/name"
+if ! bash "$hw_script"; then
+  echo "omarchy-hw-face should have exited 0 when IR interface descriptor is present" >&2
+  exit 1
+fi
+' || fail "hardware detector behavioral verification failed"
+pass "hardware detector behavioral verification passes"
+
+# 2d. Verify is_ir_device accurately identifies IR vs RGB sysfs descriptors
+bash -c '
+set -euo pipefail
+test_tmp="'"$test_tmp"'"
+source "'"$setup_copy"'"
+
+mkdir -p "$test_tmp/sys/class/video4linux/video_ir/device"
+mkdir -p "$test_tmp/sys/class/video4linux/video_rgb/device"
+mkdir -p "$test_tmp/sys/class/video4linux/video_mira/device"
+
+echo "Integrated RGB Camera: Integrat" > "$test_tmp/sys/class/video4linux/video_ir/name"
+echo "Integrated IR Camera" > "$test_tmp/sys/class/video4linux/video_ir/device/interface"
+
+echo "Integrated RGB Camera: Integrat" > "$test_tmp/sys/class/video4linux/video_rgb/name"
+echo "Integrated Camera" > "$test_tmp/sys/class/video4linux/video_rgb/device/interface"
+
+echo "MiraBox Capture Card" > "$test_tmp/sys/class/video4linux/video_mira/name"
+echo "Wireless Device" > "$test_tmp/sys/class/video4linux/video_mira/device/interface"
+
+is_ir_device "$test_tmp/sys/class/video4linux/video_ir" || exit 1
+! is_ir_device "$test_tmp/sys/class/video4linux/video_rgb" || exit 1
+! is_ir_device "$test_tmp/sys/class/video4linux/video_mira" || exit 1
+' || fail "is_ir_device fails to distinguish IR from RGB and substring devices"
+pass "is_ir_device accurately identifies Windows Hello IR sensors and rejects RGB/substring devices"
 # 3. Verify setup enrollment checks target user specifically (does not skip on unrelated models)
 bash -c '
 set -euo pipefail

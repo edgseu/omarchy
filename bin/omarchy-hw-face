@@ -1,30 +1,43 @@
 #!/bin/bash
 
-# omarchy:summary=Returns true when a camera or IR face sensor is present
+# omarchy:summary=Returns true when a Windows Hello compatible IR face sensor is present
 # omarchy:hidden=true
 
-# Detect straight from sysfs so this works before v4l-utils is installed (the
-# face setup pulls it in). A node counts as a face camera when it is bound to
-# the USB video class driver — every USB webcam, IR and RGB alike — or when it
-# names itself like an embedded (MIPI/PCIe) camera or IR sensor. Mere
-# existence of /dev/video* is not enough: HDMI ingest and tuner nodes live
-# there too, and Howdy cannot drive those.
+# Requires an infrared (IR) camera sensor. Plain RGB webcams are deliberately
+# excluded: 2D RGB image recognition is vulnerable to photo and video spoofing,
+# and does not provide Windows Hello security parity.
+
+dev_dir="/dev"
+# 1. If v4l2-ctl is installed, check for greyscale or depth pixel formats that
+# indicate an infrared sensor (GREY, Y10P, Y10, Y12, Y16, Z16, INVZ).
+if command -v v4l2-ctl &>/dev/null; then
+  for dev_node in "$dev_dir"/video*; do
+    [[ -e $dev_node ]] || continue
+    if v4l2-ctl --device="$dev_node" --list-formats 2>/dev/null | grep -qE "'(GREY|Y10P|Y10 |Y12 |Y16 |Z16 |INVZ)'"; then
+      exit 0
+    fi
+  done
+fi
 video_dir="/sys/class/video4linux"
 [[ -d $video_dir ]] || exit 1
 
 for dev in "$video_dir"/video*; do
   [[ -e $dev ]] || continue
 
-  # uvcvideo binds every USB webcam node; nothing else that matches below does.
-  if [[ -e $dev/device/driver ]] && [[ $(readlink -f "$dev/device/driver") == */uvcvideo ]]; then
-    exit 0
+  # Check USB interface descriptor string (often identifies IR on dual-sensor assemblies
+  # where V4L2 device name only reports a generic "Integrated Camera").
+  if [[ -r $dev/device/interface ]]; then
+    interface=$(<"$dev/device/interface")
+    if [[ ${interface,,} =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]]; then
+      exit 0
+    fi
   fi
 
-  # Embedded sensors name themselves instead of binding uvcvideo.
+  # Check V4L2 device name with word boundaries to avoid false positives (e.g. Wireless, MiraBox).
   if [[ -r $dev/name ]]; then
     name=$(<"$dev/name")
-    name=${name,,}
-    if [[ $name == *camera* || $name == *webcam* || $name == *sensor* || $name == *isys* || $name == *ipu* || $name == *ir* ]]; then
+    name_lower=${name,,}
+    if [[ $name_lower =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]] || [[ $name_lower == *hm1092* || $name_lower == *ov01a1s* ]]; then
       exit 0
     fi
   fi

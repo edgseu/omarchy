@@ -76,20 +76,69 @@ configure_howdy_settings() {
   fi
 }
 
+is_ir_device() {
+  local dev="$1"
+  [[ -e $dev ]] || return 1
+
+  # 1. Pixel format test: check if device exposes infrared/greyscale/depth formats.
+  if command -v v4l2-ctl &>/dev/null; then
+    if v4l2-ctl --device="$dev" --list-formats 2>/dev/null | grep -qE "'(GREY|Y10P|Y10 |Y12 |Y16 |Z16 |INVZ)'"; then
+      return 0
+    fi
+  fi
+
+  # 2. Sysfs descriptor test: inspect interface and card name with word boundaries
+  local real_node real_sys
+  if [[ -d $dev && -r $dev/name ]]; then
+    real_sys="$dev"
+  else
+    real_node=$(readlink -f "$dev" 2>/dev/null || echo "$dev")
+    real_sys="${V4L_SYSFS:-/sys/class/video4linux}/${real_node##*/}"
+  fi
+  if [[ -d $real_sys ]]; then
+    if [[ -r $real_sys/device/interface ]]; then
+      local interface
+      interface=$(<"$real_sys/device/interface")
+      if [[ ${interface,,} =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]]; then
+        return 0
+      fi
+    fi
+    if [[ -r $real_sys/name ]]; then
+      local name
+      name=$(<"$real_sys/name")
+      local name_lower=${name,,}
+      if [[ $name_lower =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]] || [[ $name_lower == *hm1092* || $name_lower == *ov01a1s* ]]; then
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
 find_ir_device() {
+  local dev
   # /dev/v4l/by-path is the stable naming (ArchWiki), and the same path the
   # IR emitter tool expects.
   if [[ -d /dev/v4l/by-path ]]; then
-    local dev dev_name
     for dev in /dev/v4l/by-path/*; do
       [[ -e $dev ]] || continue
-      dev_name=$(v4l2-ctl --device="$dev" --all 2>/dev/null | grep -i 'card' || true)
-      if [[ ${dev_name,,} == *ir* || ${dev_name,,} == *infra* ]]; then
+      if is_ir_device "$dev" && can_capture_device "$dev"; then
         echo "$dev"
         return 0
       fi
     done
   fi
+
+  # Fallback to direct video nodes if by-path symlinks are unavailable
+  for dev in /dev/video*; do
+    [[ -e $dev ]] || continue
+    if is_ir_device "$dev" && can_capture_device "$dev"; then
+      echo "$dev"
+      return 0
+    fi
+  done
+
   return 1
 }
 
@@ -113,11 +162,11 @@ can_capture_device() {
 }
 
 verify_camera_capture() {
-  # Detection only proves a camera exists, not that it can deliver frames.
-  # Grab one frame from the device Howdy is configured to read.
-  # If that device cannot stream, search for a working device and update Howdy's
-  # configured device_path so the lock screen uses a functioning camera.
-  local config_file dev working_dev=""
+  # Detection only proves an IR sensor exists, not that it can deliver frames.
+  # Grab one frame from the IR device Howdy is configured to read.
+  # If that device cannot stream, search for a working alternate IR device and update Howdy's
+  # configured device_path. Plain RGB webcams are strictly rejected.
+  local config_file working_dev=""
   config_file=$(resolve_howdy_config) || config_file=""
 
   local configured_dev="$CAMERA_DEVICE"
@@ -126,33 +175,18 @@ verify_camera_capture() {
     [[ $configured_dev == "none" ]] && configured_dev=""
   fi
 
-  if [[ -n $configured_dev ]] && can_capture_device "$configured_dev"; then
+  if [[ -n $configured_dev ]] && is_ir_device "$configured_dev" && can_capture_device "$configured_dev"; then
     CAMERA_DEVICE="$configured_dev"
     return 0
   fi
 
-  if [[ -d /dev/v4l/by-path ]]; then
-    for dev in /dev/v4l/by-path/*; do
-      if can_capture_device "$dev"; then
-        working_dev="$dev"
-        break
-      fi
-    done
-  fi
-
-  if [[ -z $working_dev ]]; then
-    for dev in /dev/video*; do
-      if can_capture_device "$dev"; then
-        working_dev="$dev"
-        break
-      fi
-    done
-  fi
+  # Search for a functioning Windows Hello IR camera.
+  working_dev=$(find_ir_device) || working_dev=""
 
   if [[ -n $working_dev ]]; then
     CAMERA_DEVICE="$working_dev"
     if [[ -n $config_file && -f $config_file ]]; then
-      echo "Configured working camera device: $working_dev"
+      echo "Configured working IR camera device: $working_dev"
       sudo sed -i -E "s|^[# ]*device_path\s*=.*|device_path = $working_dev|" "$config_file"
     fi
     return 0
@@ -202,65 +236,66 @@ run_setup() {
     echo -e "\e[31mNo camera or IR face sensor detected.\e[0m"
     exit 1
   fi
-# Install Howdy from the AUR — ArchWiki notes the plain howdy package is
-# outdated; howdy-git ships the compiled /lib/security/pam_howdy.so module.
-# Building its python-dlib/OpenCV dependency chain can take several minutes.
-echo "Installing Howdy face authentication (AUR build, this can take a while)..."
-if ! omarchy-pkg-add v4l-utils || ! omarchy-pkg-aur-add howdy-git; then
-  echo -e "\e[31mHowdy installation failed. Run 'omarchy remove security face' to clean up partial installation.\e[0m"
-  exit 1
-fi
+  # Install Howdy from the AUR — ArchWiki notes the plain howdy package is
+  # outdated; howdy-git ships the compiled /lib/security/pam_howdy.so module.
+  # Building its python-dlib/OpenCV dependency chain can take several minutes.
+  echo "Installing Howdy face authentication (AUR build, this can take a while)..."
+  if ! omarchy-pkg-add v4l-utils || ! omarchy-pkg-aur-add howdy-git; then
+    echo -e "\e[31mHowdy installation failed. Run 'omarchy remove security face' to clean up partial installation.\e[0m"
+    exit 1
+  fi
 
-configure_ir_emitter
-configure_howdy_settings
+  configure_ir_emitter
+  configure_howdy_settings
 
-# Verify the camera delivers frames before asking for a face.
-echo "Verifying the camera can capture frames..."
-if ! verify_camera_capture; then
-  echo -e "\e[31mCamera check failed: no device produced video frames.\e[0m"
-  echo -e "\e[31mHowdy packages were installed but face authentication was not enabled.\e[0m"
-  echo -e "\e[31mRun 'omarchy remove security face' to clean up partial installation.\e[0m"
-  exit 1
-fi
-
-# Enroll the baseline model, unless this build already has one for TARGET_USER
-if verify_enrollment; then
-  echo -e "\e[32mExisting face model found for $TARGET_USER; skipping enrollment.\e[0m"
-else
-  echo -e "\e[32m\nStep 1: Baseline Face Model\e[0m"
-  echo -e "Look straight at the camera with normal lighting.\n"
-
-  if sudo howdy -U "$TARGET_USER" add; then
-    if ! verify_enrollment; then
-      echo -e "\e[31mEnrollment completed but no face model was stored for $TARGET_USER. Please try again.\e[0m"
-      echo -e "\e[31mRun 'omarchy remove security face' to clean up.\e[0m"
-      exit 1
-    fi
-    echo -e "\e[32m\nBaseline model enrolled successfully!\e[0m"
-  else
-    echo -e "\e[31m\nFace enrollment failed. Please try again.\e[0m"
+  # Verify the camera delivers frames before asking for a face.
+  echo "Verifying the camera can capture frames..."
+  if ! verify_camera_capture; then
+    echo -e "\e[31mCamera check failed: no Windows Hello compatible IR camera produced video frames.\e[0m"
+    echo -e "\e[31mHowdy face authentication requires an infrared (IR) sensor to prevent photo spoofing.\e[0m"
+    echo -e "\e[31mHowdy packages were installed but face authentication was not enabled.\e[0m"
     echo -e "\e[31mRun 'omarchy remove security face' to clean up partial installation.\e[0m"
     exit 1
   fi
-fi
 
-normalize_howdy_paths
-setup_lock_howdy_pam
+  # Enroll the baseline model, unless this build already has one for TARGET_USER
+  if verify_enrollment; then
+    echo -e "\e[32mExisting face model found for $TARGET_USER; skipping enrollment.\e[0m"
+  else
+    echo -e "\e[32m\nStep 1: Baseline Face Model\e[0m"
+    echo -e "Look straight at the camera with normal lighting.\n"
 
-# Offer optional multi-angle / lighting enrollment
-echo -e "\n\e[34mTip: Enrolling a second angle (e.g. low-light or slouched posture) ensures instant unlock in all conditions.\e[0m"
-read -r -p "Would you like to enroll an additional face angle now? (y/N) " -n 1 || true
-echo ""
+    if sudo howdy -U "$TARGET_USER" add; then
+      if ! verify_enrollment; then
+        echo -e "\e[31mEnrollment completed but no face model was stored for $TARGET_USER. Please try again.\e[0m"
+        echo -e "\e[31mRun 'omarchy remove security face' to clean up.\e[0m"
+        exit 1
+      fi
+      echo -e "\e[32m\nBaseline model enrolled successfully!\e[0m"
+    else
+      echo -e "\e[31m\nFace enrollment failed. Please try again.\e[0m"
+      echo -e "\e[31mRun 'omarchy remove security face' to clean up partial installation.\e[0m"
+      exit 1
+    fi
+  fi
 
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-  echo -e "\e[32m\nStep 2: Secondary Face Model\e[0m"
-  echo -e "Look at the camera from a slight angle, with glasses, or in dimmer light.\n"
-  sudo howdy -U "$TARGET_USER" add || true
   normalize_howdy_paths
-fi
+  setup_lock_howdy_pam
 
-echo -e "\e[32m\nPerfect! Face authentication is now completely configured.\e[0m"
-echo "You can unlock your lock screen (Super + L) instantly by looking at the camera."
+  # Offer optional multi-angle / lighting enrollment
+  echo -e "\n\e[34mTip: Enrolling a second angle (e.g. low-light or slouched posture) ensures instant unlock in all conditions.\e[0m"
+  read -r -p "Would you like to enroll an additional face angle now? (y/N) " -n 1 || true
+  echo ""
+
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "\e[32m\nStep 2: Secondary Face Model\e[0m"
+    echo -e "Look at the camera from a slight angle, with glasses, or in dimmer light.\n"
+    sudo howdy -U "$TARGET_USER" add || true
+    normalize_howdy_paths
+  fi
+
+  echo -e "\e[32m\nPerfect! Face authentication is now completely configured.\e[0m"
+  echo "You can unlock your lock screen (Super + L) instantly by looking at the camera."
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
