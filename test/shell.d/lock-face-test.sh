@@ -511,6 +511,34 @@ if is_ir_device "$test_tmp/dev/video_hybrid"; then
 fi
 ' || fail "is_ir_device must reject cameras advertising consumer RGB formats alongside GREY"
 pass "is_ir_device rejects cameras advertising consumer RGB formats alongside GREY"
+
+# 2f. Verify is_ir_device accepts an explicitly-identified IR camera even if it advertises MJPG compression
+bash -c '
+set -euo pipefail
+test_tmp="'"$test_tmp"'"
+source "'"$setup_copy"'"
+
+mkdir -p "$test_tmp/dev"
+mkdir -p "$test_tmp/sys/class/video4linux/video_ir_mjpg/device"
+touch "$test_tmp/dev/video_ir_mjpg"
+
+# Sibling sysfs setup: explicit IR interface descriptor
+echo "Integrated IR Camera" > "$test_tmp/sys/class/video4linux/video_ir_mjpg/device/interface"
+echo "Integrated RGB Camera: Integrat" > "$test_tmp/sys/class/video4linux/video_ir_mjpg/name"
+
+# Mock v4l2-ctl output: IR camera advertises MJPG compression alongside an IR format
+v4l2-ctl() {
+  echo "[0]: '\''MJPG'\'' (Motion-JPEG)"
+  echo "[1]: '\''GREY'\'' (8-bit Greyscale)"
+}
+
+export V4L_SYSFS="$test_tmp/sys/class/video4linux"
+if ! is_ir_device "$test_tmp/dev/video_ir_mjpg"; then
+  echo "is_ir_device should have accepted an IR camera with explicit IR interface even if it advertises MJPG" >&2
+  exit 1
+fi
+' || fail "is_ir_device must accept an explicitly-identified IR camera even if it supports MJPG compression"
+pass "is_ir_device accepts explicitly-identified IR cameras that support MJPG compression"
 # 3. Verify setup enrollment checks target user specifically (does not skip on unrelated models)
 bash -c '
 set -euo pipefail

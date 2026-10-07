@@ -80,15 +80,6 @@ is_ir_device() {
   local dev="$1"
   [[ -e $dev ]] || return 1
 
-  local formats=""
-  if command -v v4l2-ctl &>/dev/null; then
-    formats=$(v4l2-ctl --device="$dev" --list-formats 2>/dev/null || true)
-    # 1. Reject devices that advertise consumer RGB/color video formats
-    if echo "$formats" | grep -qE "'(MJPG|RGB3|BGR3|NV12|RGB4|BGR4)'"; then
-      return 1
-    fi
-  fi
-
   # Resolve sysfs directory for this node
   local real_node real_sys
   if [[ -d $dev && -r $dev/name ]]; then
@@ -98,7 +89,8 @@ is_ir_device() {
     real_sys="${V4L_SYSFS:-/sys/class/video4linux}/${real_node##*/}"
   fi
 
-  # 2. Check explicit IR naming in USB interface descriptor or V4L2 device name
+  # 1. Affirmative IR identity: explicit IR naming in USB interface descriptor or V4L2 device name.
+  # This takes precedence over compression formats (e.g. IR cameras using MJPG for bus bandwidth).
   if [[ -d $real_sys ]]; then
     if [[ -r $real_sys/device/interface ]]; then
       local interface
@@ -117,18 +109,25 @@ is_ir_device() {
     fi
   fi
 
-  # 3. Check infrared-specific raw sensor formats or GREY with IR corroboration
-  if [[ -n $formats ]]; then
-    # Dedicated depth and infrared raw sensor formats
-    if echo "$formats" | grep -qE "'(Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
-      return 0
-    fi
+  local formats=""
+  if command -v v4l2-ctl &>/dev/null; then
+    formats=$(v4l2-ctl --device="$dev" --list-formats 2>/dev/null || true)
+  fi
 
-    # Standard GREY format requires hardware IR corroboration (e.g. UVC Extension units)
-    if echo "$formats" | grep -qE "'GREY'"; then
-      if v4l2-ctl --device="$dev" --all 2>/dev/null | grep -qiE 'Extension|infrared|(\b|_)ir(\b|_)'; then
-        return 0
-      fi
+  # 2. Dedicated raw depth and infrared sensor formats that visible webcams do not expose.
+  if [[ -n $formats ]] && echo "$formats" | grep -qE "'(Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
+    return 0
+  fi
+
+  # 3. For generic devices lacking explicit IR identity: reject consumer RGB/color video formats.
+  if [[ -n $formats ]] && echo "$formats" | grep -qE "'(MJPG|RGB3|BGR3|NV12|RGB4|BGR4)'"; then
+    return 1
+  fi
+
+  # 4. Standard GREY format on generic nodes requires hardware IR corroboration (e.g. UVC Extension units).
+  if [[ -n $formats ]] && echo "$formats" | grep -qE "'GREY'"; then
+    if command -v v4l2-ctl &>/dev/null && v4l2-ctl --device="$dev" --all 2>/dev/null | grep -qiE 'Extension|infrared|(\b|_)ir(\b|_)'; then
+      return 0
     fi
   fi
 

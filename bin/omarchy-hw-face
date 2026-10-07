@@ -7,21 +7,49 @@
 # excluded: 2D RGB image recognition is vulnerable to photo and video spoofing,
 # and does not provide Windows Hello security parity.
 
+video_dir="/sys/class/video4linux"
 dev_dir="/dev"
-# 1. If v4l2-ctl is installed, check for verified infrared or depth pixel formats.
+
+# 1. Affirmative IR identity: check USB interface descriptor and V4L2 device name in sysfs.
+# This takes precedence over compression formats (e.g. IR cameras using MJPG for bus bandwidth).
+if [[ -d $video_dir ]]; then
+  for dev in "$video_dir"/video*; do
+    [[ -e $dev ]] || continue
+
+    if [[ -r $dev/device/interface ]]; then
+      interface=$(<"$dev/device/interface")
+      if [[ ${interface,,} =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]]; then
+        exit 0
+      fi
+    fi
+
+    if [[ -r $dev/name ]]; then
+      name=$(<"$dev/name")
+      name_lower=${name,,}
+      if [[ $name_lower =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]] || [[ $name_lower == *hm1092* || $name_lower == *ov01a1s* ]]; then
+        exit 0
+      fi
+    fi
+  done
+fi
+
+# 2. If v4l2-ctl is installed, check for dedicated infrared or depth pixel formats.
 if command -v v4l2-ctl &>/dev/null; then
   for dev_node in "$dev_dir"/video*; do
     [[ -e $dev_node ]] || continue
     formats=$(v4l2-ctl --device="$dev_node" --list-formats 2>/dev/null || true)
-    # Skip nodes advertising consumer RGB/color video formats
-    if echo "$formats" | grep -qE "'(MJPG|RGB3|BGR3|NV12|RGB4|BGR4)'"; then
-      continue
-    fi
+
     # Raw infrared or depth sensor formats
     if echo "$formats" | grep -qE "'(Z16 |INVZ|INVR|INVO|Y10P|Y10 |Y12 |Y16 )'"; then
       exit 0
     fi
-    # GREY format requires hardware IR corroboration (e.g. UVC Extension units)
+
+    # Skip generic nodes advertising consumer RGB/color video formats
+    if echo "$formats" | grep -qE "'(MJPG|RGB3|BGR3|NV12|RGB4|BGR4)'"; then
+      continue
+    fi
+
+    # GREY format on generic nodes requires hardware IR corroboration (e.g. UVC Extension units)
     if echo "$formats" | grep -qE "'GREY'"; then
       if v4l2-ctl --device="$dev_node" --all 2>/dev/null | grep -qiE 'Extension|infrared|(\b|_)ir(\b|_)'; then
         exit 0
@@ -29,29 +57,5 @@ if command -v v4l2-ctl &>/dev/null; then
     fi
   done
 fi
-video_dir="/sys/class/video4linux"
-[[ -d $video_dir ]] || exit 1
-
-for dev in "$video_dir"/video*; do
-  [[ -e $dev ]] || continue
-
-  # Check USB interface descriptor string (often identifies IR on dual-sensor assemblies
-  # where V4L2 device name only reports a generic "Integrated Camera").
-  if [[ -r $dev/device/interface ]]; then
-    interface=$(<"$dev/device/interface")
-    if [[ ${interface,,} =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]]; then
-      exit 0
-    fi
-  fi
-
-  # Check V4L2 device name with word boundaries to avoid false positives (e.g. Wireless, MiraBox).
-  if [[ -r $dev/name ]]; then
-    name=$(<"$dev/name")
-    name_lower=${name,,}
-    if [[ $name_lower =~ (^|[^a-z0-9])(ir|infrared|realsense)([^a-z0-9]|$) ]] || [[ $name_lower == *hm1092* || $name_lower == *ov01a1s* ]]; then
-      exit 0
-    fi
-  fi
-done
 
 exit 1
