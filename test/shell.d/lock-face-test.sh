@@ -138,6 +138,10 @@ if grep -q "ls /dev/video" "$ROOT/bin/omarchy-hw-face"; then
   fail "hardware detector must not match every /dev/video node"
 fi
 pass "hardware detector must not match every /dev/video node"
+if ! grep -q "VIDIOC_ENUM_FMT" "$ROOT/bin/omarchy-hw-face"; then
+  fail "hardware detector provides native V4L2 format enumeration fallback when v4l2-ctl is absent"
+fi
+pass "hardware detector provides native V4L2 format enumeration fallback when v4l2-ctl is absent"
 
 # Enrollment mirrors the fingerprint flow: prove the camera delivers frames
 # before asking for a face, and prove enrollment stored a model before any
@@ -294,10 +298,10 @@ if ! grep -q '"setup.security.face"' "$MENU" || ! grep -q '"omarchy-hw-face"' "$
 fi
 pass "menu declares setup.security.face gated by omarchy-hw-face"
 
-if ! grep -q '"remove.security.face"' "$MENU" || ! grep -q '"omarchy-pkg-present howdy-git"' "$MENU"; then
-  fail "menu declares remove.security.face gated by howdy-git presence"
+if ! grep -q '"remove.security.face"' "$MENU" || ! grep -q 'omarchy-pkg-present howdy-git' "$MENU" || ! grep -q 'omarchy-pkg-present howdy' "$MENU" || ! grep -q 'omarchy-lock-howdy' "$MENU"; then
+  fail "menu declares remove.security.face covering package, PAM, and model cleanup states"
 fi
-pass "menu declares remove.security.face gated by howdy-git presence"
+pass "menu declares remove.security.face covering package, PAM, and model cleanup states"
 
 if ! grep -q "separate password, fingerprint, and face PAM flows" "$MANIFEST"; then
   fail "lock manifest documents the face PAM flow"
@@ -475,6 +479,15 @@ echo "Integrated IR Camera" > "$hw_tmp/video2/device/interface"
 echo "Integrated RGB Camera: Integrat" > "$hw_tmp/video2/name"
 if ! bash "$hw_script"; then
   echo "omarchy-hw-face should have exited 0 when IR interface descriptor is present" >&2
+  exit 1
+fi
+# Case 3: When v4l2-ctl is absent, native fallback executes cleanly
+stub_no_v4l="$hw_tmp/no-v4l"
+mkdir -p "$stub_no_v4l"
+echo "#!/bin/false" > "$stub_no_v4l/v4l2-ctl"
+chmod -x "$stub_no_v4l/v4l2-ctl"
+if ! PATH="$stub_no_v4l:$PATH" bash "$hw_script"; then
+  echo "omarchy-hw-face should succeed via native fallback when v4l2-ctl is absent" >&2
   exit 1
 fi
 ' || fail "hardware detector behavioral verification failed"
