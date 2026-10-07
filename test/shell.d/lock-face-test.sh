@@ -481,13 +481,28 @@ if ! bash "$hw_script"; then
   echo "omarchy-hw-face should have exited 0 when IR interface descriptor is present" >&2
   exit 1
 fi
-# Case 3: When v4l2-ctl is absent, native fallback executes cleanly
+# Case 3: When an IR camera has generic metadata and v4l2-ctl is absent, native fallback identifies format
+echo "Integrated Camera" > "$hw_tmp/video2/device/interface"
+echo "Integrated RGB Camera: Integrat" > "$hw_tmp/video2/name"
+mkdir -p "$hw_tmp/dev"
+touch "$hw_tmp/dev/video2"
+
 stub_no_v4l="$hw_tmp/no-v4l"
 mkdir -p "$stub_no_v4l"
 echo "#!/bin/false" > "$stub_no_v4l/v4l2-ctl"
 chmod -x "$stub_no_v4l/v4l2-ctl"
+
+# 3a. Generic metadata without IR format (MJPG) -> must exit 1 (ensures Step 1 did not prematurely pass)
+echo "MJPG" > "$hw_tmp/video2/formats"
+if PATH="$stub_no_v4l:$PATH" bash "$hw_script"; then
+  echo "omarchy-hw-face should exit 1 when metadata is generic and format is MJPG" >&2
+  exit 1
+fi
+
+# 3b. Generic metadata with raw IR format (Z16) -> native fallback must exit 0
+echo "Z16" > "$hw_tmp/video2/formats"
 if ! PATH="$stub_no_v4l:$PATH" bash "$hw_script"; then
-  echo "omarchy-hw-face should succeed via native fallback when v4l2-ctl is absent" >&2
+  echo "omarchy-hw-face should exit 0 via native format fallback when IR format Z16 is present" >&2
   exit 1
 fi
 ' || fail "hardware detector behavioral verification failed"
